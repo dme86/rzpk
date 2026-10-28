@@ -1499,6 +1499,129 @@ mod tests {
         Ok(())
     }
 
+    fn transfer_fixture() -> io::Result<(App, PathBuf)> {
+        let root = split_fixture()?;
+        let left = root.join("left");
+        let right = root.join("right");
+        fs::create_dir_all(&left)?;
+        fs::create_dir_all(&right)?;
+        fs::write(left.join("copy.txt"), "example")?;
+        fs::write(left.join("second.rs"), "fn main() {}")?;
+        let mut app = app(read_directory(&left)?);
+        app.cwd = left;
+        app.toggle_vertical_split()?;
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.change_directory(right, None)?;
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        Ok((app, root))
+    }
+
+    #[test]
+    fn shift_c_copies_marked_files_after_confirmation() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        app.selection.toggle(0);
+        app.selection.toggle(1);
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        assert_eq!(app.pending_transfer.as_ref().unwrap().sources.len(), 2);
+        assert!(app.typed.is_empty());
+        assert!(!root.join("right/copy.txt").exists());
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.pending_transfer.is_none());
+        assert_eq!(fs::read_to_string(root.join("right/copy.txt"))?, "example");
+        assert!(root.join("right/second.rs").exists());
+        assert!(root.join("left/copy.txt").exists());
+        assert_eq!(app.selection.count(), 0);
+        assert_eq!(app.status.as_deref(), Some("Copied 2 item(s)"));
+        assert_eq!(app.other.as_ref().unwrap().entries.len(), 2);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn shift_m_moves_from_right_to_left() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        fs::write(root.join("right/from_right.txt"), "right")?;
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.other.as_mut().unwrap().refresh_listing()?;
+        app.change_directory(root.join("right"), None)?;
+        app.handle_key(key(KeyCode::Char('m'), KeyModifiers::SHIFT));
+        assert_eq!(app.pending_transfer.as_ref().unwrap().kind, TransferKind::Move);
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!root.join("right/from_right.txt").exists());
+        assert_eq!(fs::read_to_string(root.join("left/from_right.txt"))?, "right");
+        assert!(app.active_right);
+        assert_eq!(app.status.as_deref(), Some("Moved 1 item(s)"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn escape_cancels_pending_copy_but_keeps_selection() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        app.selection.toggle(0);
+        app.handle_key(key(KeyCode::Char('c'), KeyModifiers::SHIFT));
+        assert!(app.pending_transfer.is_some());
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.pending_transfer.is_none());
+        assert_eq!(app.selection.count(), 1);
+        assert!(!root.join("right/copy.txt").exists());
+        assert!(app.running);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn transfer_rejects_existing_target_without_confirmation() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        fs::write(root.join("right/copy.txt"), "original")?;
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::NONE));
+        assert!(app.pending_transfer.is_none());
+        assert!(app.error.as_deref().unwrap().contains("already exists"));
+        assert_eq!(fs::read_to_string(root.join("right/copy.txt"))?, "original");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn typing_lowercase_letters_still_searches_instead_of_copying() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        app.handle_key(key(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert_eq!(app.entries[app.selected].name, "second.rs");
+        app.handle_key(key(KeyCode::Char('c'), KeyModifiers::NONE));
+        assert!(app.pending_transfer.is_none());
+        assert!(app.running);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn copy_requires_split_view() {
+        let mut app = app(vec![sample("hello.txt", false)]);
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        assert!(app.pending_transfer.is_none());
+        assert!(app.error.as_deref().unwrap().contains(":v"));
+    }
+
+    #[test]
+    fn selected_tree_items_are_not_confused_with_more_rows() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        let dir = root.join("left").join("folder");
+        fs::create_dir(&dir)?;
+        fs::write(dir.join("child.txt"), "hello")?;
+        app.toggle_tree()?;
+        let folder_index = app.entries.iter().position(|entry| entry.name == "folder").unwrap();
+        app.selected = folder_index;
+        app.selection.toggle(folder_index);
+        let child_index = app.entries.iter().position(|entry| entry.name == "child.txt").unwrap();
+        app.selection.toggle(child_index);
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        assert_eq!(app.pending_transfer.as_ref().unwrap().sources.len(), 1);
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(root.join("right/folder/child.txt").exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
     #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
