@@ -872,16 +872,22 @@ impl App {
                 let filled = (percent as usize * 12 / 100).min(12);
                 let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(12 - filled));
                 spans.push(Span::styled(bar, Style::default().fg(Color::Rgb(184, 187, 38))));
-                spans.push(Span::styled(
-                    format!(" {percent:>3}%  {}/{} items", snapshot.items, snapshot.total),
-                    bright,
-                ));
+                let detail = if snapshot.total_bytes > 0 {
+                    format!(
+                        " {percent:>3}%  {:.1}/{:.1} MiB",
+                        snapshot.bytes as f64 / 1_048_576.0,
+                        snapshot.total_bytes as f64 / 1_048_576.0,
+                    )
+                } else {
+                    format!(" {percent:>3}%  {}/{} items", snapshot.items, snapshot.total)
+                };
+                spans.push(Span::styled(detail, bright));
             } else if snapshot.items > 0 {
                 spans.push(Span::styled(format!("{} entries", snapshot.items), bright));
             } else {
                 spans.push(Span::styled("working…", subdued));
             }
-            if snapshot.bytes > 0 {
+            if snapshot.bytes > 0 && snapshot.total_bytes == 0 {
                 let amount = if snapshot.bytes >= 1_048_576 {
                     format!("{:.1} MiB", snapshot.bytes as f64 / 1_048_576.0)
                 } else {
