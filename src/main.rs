@@ -2722,6 +2722,164 @@ mod tests {
     }
 
     #[test]
+    fn left_then_right_restores_last_focused_file_not_first_entry() -> io::Result<()> {
+        let root = split_fixture()?;
+        let folder = root.join("alpha");
+        fs::write(folder.join("aa.txt"), "one")?;
+        fs::write(folder.join("zz.txt"), "two")?;
+        let mut app = app(read_directory(&folder)?);
+        app.cwd = folder.clone();
+        app.selected = app.entries.iter().position(|e| e.name == "zz.txt").unwrap();
+        app.selection.toggle(app.selected);
+        app.scroll = 6;
+
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        assert_eq!(app.entries[app.selected].name, "alpha");
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.cwd, folder);
+        assert_eq!(app.entries[app.selected].name, "zz.txt");
+        assert_eq!(app.scroll, 6);
+        // Marks remain directory-scoped: only the focused entry is recalled.
+        assert_eq!(app.selection.count(), 0);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn nested_back_and_forward_restores_each_directory_focus() -> io::Result<()> {
+        let root = split_fixture()?;
+        let outer = root.join("alpha");
+        let inner = outer.join("nested");
+        fs::create_dir(&inner)?;
+        fs::write(outer.join("other.txt"), "x")?;
+        fs::write(inner.join("a.txt"), "one")?;
+        fs::write(inner.join("z.txt"), "two")?;
+        let mut app = app(read_directory(&inner)?);
+        app.cwd = inner.clone();
+        app.selected = app.entries.iter().position(|e| e.name == "z.txt").unwrap();
+
+        app.parent()?;
+        assert_eq!(app.entries[app.selected].name, "nested");
+        app.parent()?;
+        assert_eq!(app.entries[app.selected].name, "alpha");
+        app.enter_directory()?;
+        assert_eq!(app.cwd, outer);
+        assert_eq!(app.entries[app.selected].name, "nested");
+        app.enter_directory()?;
+        assert_eq!(app.cwd, inner);
+        assert_eq!(app.entries[app.selected].name, "z.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn split_panes_remember_different_focus_in_same_directory() -> io::Result<()> {
+        let root = split_fixture()?;
+        let folder = root.join("alpha");
+        fs::write(folder.join("a.txt"), "a")?;
+        fs::write(folder.join("z.txt"), "z")?;
+        let mut app = app(read_directory(&folder)?);
+        app.cwd = folder.clone();
+        app.toggle_vertical_split()?;
+        app.selected = app.entries.iter().position(|e| e.name == "z.txt").unwrap();
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.selected = app.entries.iter().position(|e| e.name == "a.txt").unwrap();
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.cwd, folder);
+        assert_eq!(app.entries[app.selected].name, "a.txt");
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.cwd, folder);
+        assert_eq!(app.entries[app.selected].name, "z.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn revisiting_via_saved_jump_restores_previous_focus() -> io::Result<()> {
+        let root = split_fixture()?;
+        let folder = root.join("alpha");
+        fs::write(folder.join("a.txt"), "a")?;
+        fs::write(folder.join("z.txt"), "z")?;
+        let mut app = app(read_directory(&folder)?);
+        app.cwd = folder.clone();
+        app.jumps.set(1, folder.clone())?;
+        app.selected = app.entries.iter().position(|e| e.name == "z.txt").unwrap();
+
+        app.parent()?;
+        app.handle_key(key(KeyCode::Char('1'), KeyModifiers::ALT));
+        assert_eq!(app.cwd, folder);
+        assert_eq!(app.entries[app.selected].name, "z.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn deleted_focused_file_falls_back_to_first_existing_entry() -> io::Result<()> {
+        let root = split_fixture()?;
+        let folder = root.join("alpha");
+        fs::write(folder.join("a.txt"), "a")?;
+        fs::write(folder.join("z.txt"), "z")?;
+        let mut app = app(read_directory(&folder)?);
+        app.cwd = folder.clone();
+        app.selected = app.entries.iter().position(|e| e.name == "z.txt").unwrap();
+
+        app.parent()?;
+        fs::remove_file(folder.join("z.txt"))?;
+        app.enter_directory()?;
+        assert_eq!(app.cwd, folder);
+        assert_eq!(app.entries[app.selected].name, "a.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tree_and_preview_modes_remember_last_focus() -> io::Result<()> {
+        let root = split_fixture()?;
+        let folder = root.join("alpha");
+        fs::write(folder.join("a.txt"), "a")?;
+        fs::write(folder.join("z.txt"), "z")?;
+        let mut app = app(read_directory(&folder)?);
+        app.cwd = folder.clone();
+        app.toggle_tree()?;
+        app.toggle_preview();
+        app.selected = app.entries.iter().position(|e| e.name == "z.txt").unwrap();
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert!(app.tree_mode && app.preview_mode);
+        assert_eq!(app.cwd, folder);
+        assert_eq!(app.entries[app.selected].name, "z.txt");
+        assert_eq!(app.preview.as_ref().unwrap().title, "z.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_directory_change_does_not_destroy_previous_focus() -> io::Result<()> {
+        let root = split_fixture()?;
+        let folder = root.join("alpha");
+        fs::write(folder.join("a.txt"), "a")?;
+        fs::write(folder.join("z.txt"), "z")?;
+        let mut app = app(read_directory(&folder)?);
+        app.cwd = folder.clone();
+        app.selected = app.entries.iter().position(|e| e.name == "z.txt").unwrap();
+
+        assert!(app.change_directory(root.join("does-not-exist"), None).is_err());
+        assert_eq!(app.cwd, folder);
+        app.parent()?;
+        app.enter_directory()?;
+        assert_eq!(app.entries[app.selected].name, "z.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
