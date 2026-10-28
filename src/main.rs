@@ -6,12 +6,14 @@ use std::{
 
 mod config;
 mod details;
+mod pane;
 mod render;
 mod selection;
 
 use config::{Config, MetadataPosition};
 use details::{Columns, permissions};
-use render::{EntryHighlight, entry_line, maximum_name_width};
+use render::maximum_name_width;
+use pane::{PaneState, PaneView, draw_entries, draw_split_pane, use_two_columns};
 use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -132,6 +134,8 @@ struct App {
     last_typed: Option<Instant>,
     error: Option<String>,
     running: bool,
+    other: Option<PaneState>,
+    active_right: bool,
 }
 
 impl App {
@@ -153,6 +157,8 @@ impl App {
             last_typed: None,
             error: None,
             running: true,
+            other: None,
+            active_right: false,
         })
     }
 
@@ -265,6 +271,41 @@ impl App {
         self.clear_typed();
     }
 
+    fn switch_pane(&mut self) {
+        let Some(other) = self.other.as_mut() else {
+            return;
+        };
+        // Store the inactive pane in `other`, leaving the focused pane in the
+        // existing fields. All filesystem and keyboard methods stay pane-local.
+        std::mem::swap(&mut self.cwd, &mut other.cwd);
+        std::mem::swap(&mut self.entries, &mut other.entries);
+        std::mem::swap(&mut self.max_name_width, &mut other.max_name_width);
+        std::mem::swap(&mut self.selected, &mut other.selected);
+        std::mem::swap(&mut self.selection, &mut other.selection);
+        std::mem::swap(&mut self.scroll, &mut other.scroll);
+        std::mem::swap(&mut self.typed, &mut other.typed);
+        std::mem::swap(&mut self.last_typed, &mut other.last_typed);
+        std::mem::swap(&mut self.error, &mut other.error);
+        self.active_right = !self.active_right;
+    }
+
+    fn toggle_vertical_split(&mut self) -> io::Result<()> {
+        if self.other.is_some() {
+            // Closing the split always keeps the left pane visible.
+            if self.active_right {
+                self.switch_pane();
+            }
+            self.other = None;
+            self.active_right = false;
+        } else {
+            // Open the right pane in the same folder, but with independent
+            // cursor, selection, search, scroll and navigation.
+            self.other = Some(PaneState::open(&self.cwd)?);
+            self.active_right = false;
+        }
+        Ok(())
+    }
+
     fn handle_command_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -273,10 +314,14 @@ impl App {
             KeyCode::Esc => self.command = None,
             KeyCode::Enter => {
                 let command = self.command.take().unwrap_or_default();
-                if command.trim() == "q" {
-                    self.running = false;
-                } else {
-                    self.error = Some(format!("unknown command: :{command}"));
+                match command.trim() {
+                    "q" => self.running = false,
+                    "v" => {
+                        if let Err(error) = self.toggle_vertical_split() {
+                            self.error = Some(error.to_string());
+                        }
+                    }
+                    _ => self.error = Some(format!("unknown command: :{command}")),
                 }
             }
             KeyCode::Backspace => {
@@ -323,6 +368,7 @@ impl App {
                 self.clear_typed();
                 self.error = None;
             }
+            KeyCode::Tab | KeyCode::BackTab if !ctrl && !alt => self.switch_pane(),
             KeyCode::Backspace => {
                 if let Err(error) = self.parent() {
                     self.error = Some(error.to_string());
@@ -354,34 +400,49 @@ impl App {
             return;
         }
 
-        let mut title = vec![
-            Span::styled(
-                " rzpk ",
-                Style::default()
-                    .fg(Color::Rgb(126, 184, 238))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(self.cwd.display().to_string(), Style::default().fg(Color::DarkGray)),
-        ];
-        if self.selection.count() > 0 {
+        let split = self.other.is_some();
+        let mut title = vec![Span::styled(
+            " rzpk ",
+            Style::default()
+                .fg(Color::Rgb(126, 184, 238))
+                .add_modifier(Modifier::BOLD),
+        )];
+
+        if split {
             title.push(Span::styled(
-                format!("  {} marked", self.selection.count()),
-                Style::default().fg(Color::Rgb(91, 205, 160)),
+                "[v]",
+                Style::default().fg(Color::Rgb(93, 203, 165)),
             ));
+            title.push(Span::styled(
+                "  Tab: switch",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            title.push(Span::raw("  "));
+            title.push(Span::styled(
+                self.cwd.display().to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+            if self.selection.count() > 0 {
+                title.push(Span::styled(
+                    format!("  {} marked", self.selection.count()),
+                    Style::default().fg(Color::Rgb(91, 205, 160)),
+                ));
+            }
         }
+
         if let Some(command) = &self.command {
             title.push(Span::styled(
                 format!("  :{command}█"),
                 Style::default().fg(Color::Yellow),
             ));
-        } else if !self.typed.is_empty() {
+        } else if !split && !self.typed.is_empty() {
             title.push(Span::styled(
                 format!("  /{}", self.typed),
                 Style::default().fg(Color::Yellow),
             ));
         }
-        if let Some(error) = &self.error {
+        if !split && let Some(error) = &self.error {
             title.push(Span::styled(
                 format!("  {error}"),
                 Style::default().fg(Color::LightRed),
@@ -392,50 +453,61 @@ impl App {
             Rect::new(area.x, area.y, area.width, 1),
         );
 
-        let height = usize::from(area.height.saturating_sub(1));
-        if height == 0 {
+        let content = Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            area.height.saturating_sub(1),
+        );
+
+        let mut current = PaneView {
+            cwd: &self.cwd,
+            entries: &self.entries,
+            max_name_width: self.max_name_width,
+            selected: self.selected,
+            selection: &self.selection,
+            scroll: &mut self.scroll,
+            typed: &self.typed,
+            error: self.error.as_deref(),
+        };
+
+        let Some(other) = self.other.as_mut() else {
+            draw_entries(frame, content, &mut current, self.metadata_position, true);
             return;
-        }
-        if self.entries.is_empty() {
-            frame.render_widget(
-                Paragraph::new("  (empty directory)").style(Style::default().fg(Color::DarkGray)),
-                Rect::new(area.x, area.y + 1, area.width, 1),
-            );
+        };
+        let mut inactive = other.view();
+
+        if !use_two_columns(area.width) {
+            draw_split_pane(frame, content, &mut current, self.metadata_position, true);
             return;
         }
 
-        // Render only the visible rows; never build a widget for every file.
-        if self.selected < self.scroll {
-            self.scroll = self.selected;
-        } else if self.selected >= self.scroll.saturating_add(height) {
-            self.scroll = self.selected + 1 - height;
+        let left_width = area.width.saturating_sub(1) / 2;
+        let right_width = area.width.saturating_sub(1 + left_width);
+        let left = Rect::new(content.x, content.y, left_width, content.height);
+        let divider_x = content.x.saturating_add(left_width);
+        let right = Rect::new(
+            divider_x.saturating_add(1),
+            content.y,
+            right_width,
+            content.height,
+        );
+
+        for y in content.y..content.y.saturating_add(content.height) {
+            frame.render_widget(
+                Paragraph::new("│").style(Style::default().fg(Color::Rgb(51, 64, 78))),
+                Rect::new(divider_x, y, 1, 1),
+            );
         }
 
-        let columns = Columns::for_width(area.width);
-        let now = SystemTime::now();
-        for (row, entry) in self.entries.iter().skip(self.scroll).take(height).enumerate() {
-            let index = self.scroll + row;
-            let selected = index == self.selected;
-            let marked = self.selection.contains(index);
-            let background = match (selected, marked) {
-                (true, true) => Style::default().bg(Color::Rgb(37, 75, 65)),
-                (true, false) => Style::default().bg(Color::Rgb(36, 51, 69)),
-                (false, true) => Style::default().bg(Color::Rgb(27, 53, 48)),
-                (false, false) => Style::default(),
-            };
-            let line = entry_line(
-                entry,
-                EntryHighlight { focused: selected, marked },
-                columns,
-                self.metadata_position,
-                self.max_name_width,
-                area.width,
-                now,
-            );
-            frame.render_widget(
-                Paragraph::new(line).style(background),
-                Rect::new(area.x, area.y + 1 + row as u16, area.width, 1),
-            );
+        // `current` is always the active pane; swapping it on Tab preserves
+        // the left/right coordinates independently from each pane's state.
+        if self.active_right {
+            draw_split_pane(frame, left, &mut inactive, self.metadata_position, false);
+            draw_split_pane(frame, right, &mut current, self.metadata_position, true);
+        } else {
+            draw_split_pane(frame, left, &mut current, self.metadata_position, true);
+            draw_split_pane(frame, right, &mut inactive, self.metadata_position, false);
         }
     }
 
@@ -463,6 +535,11 @@ impl App {
                 .is_some_and(|last| last.elapsed() >= TYPE_TIMEOUT)
             {
                 self.clear_typed();
+                needs_redraw = true;
+            }
+            if let Some(other) = self.other.as_mut()
+                && other.expire_search(TYPE_TIMEOUT)
+            {
                 needs_redraw = true;
             }
         }
@@ -509,6 +586,8 @@ mod tests {
             last_typed: None,
             error: None,
             running: true,
+            other: None,
+            active_right: false,
         }
     }
 
