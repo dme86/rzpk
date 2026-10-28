@@ -11,7 +11,7 @@ mod selection;
 
 use config::{Config, MetadataPosition};
 use details::{Columns, permissions};
-use render::{entry_line, maximum_name_width};
+use render::{EntryHighlight, entry_line, maximum_name_width};
 use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -367,8 +367,7 @@ impl App {
             };
             let line = entry_line(
                 entry,
-                selected,
-                marked,
+                EntryHighlight { focused: selected, marked },
                 columns,
                 self.metadata_position,
                 self.max_name_width,
