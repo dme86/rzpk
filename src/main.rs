@@ -856,6 +856,120 @@ mod tests {
         Ok(())
     }
 
+    fn split_fixture() -> io::Result<PathBuf> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is set")
+            .as_nanos();
+        let root = env::temp_dir().join(format!("rzpk-split-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(root.join("alpha"))?;
+        fs::create_dir_all(root.join("beta"))?;
+        fs::write(root.join("notes.txt"), b"sample")?;
+        Ok(root)
+    }
+
+    #[test]
+    fn command_v_creates_split_and_an_independent_right_pane() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('v'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(app.other.is_some());
+        assert!(!app.active_right);
+        assert_eq!(app.other.as_ref().unwrap().cwd, root);
+        assert_eq!(app.other.as_ref().unwrap().selected, 0);
+        assert!(app.running);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tab_switches_independent_cursor_selection_and_directory() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+
+        // Left marks alpha and focuses beta.
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.selection.count(), 1);
+
+        // Right starts unmarked at alpha and can navigate into it.
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.active_right);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.selection.count(), 0);
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("alpha"));
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+
+        // Left kept its own cursor and mark; changes on right never touched it.
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(!app.active_right);
+        assert_eq!(app.cwd, root);
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.selection.count(), 1);
+        assert!(app.selection.contains(0));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pane_specific_search_and_escape_only_affect_active_side() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.jump_to('b');
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.typed, "b");
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.typed.is_empty());
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 0);
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.typed, "b");
+        assert_eq!(app.selected, 1);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn second_v_closes_split_and_preserves_left_pane() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.selected = 2;
+        app.toggle_vertical_split()?;
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.selected = 1;
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('v'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.other.is_none());
+        assert!(!app.active_right);
+        assert_eq!(app.selected, 2);
+        assert!(app.running);
+
+        // Tab alone is harmless when split view is closed.
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.selected, 2);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
     #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
