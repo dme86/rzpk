@@ -1778,8 +1778,8 @@ mod tests {
         app.handle_key(key(KeyCode::Char('e'), KeyModifiers::SHIFT));
         assert!(app.pending_archive.is_some());
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.status.as_deref(), Some("Extracted to notes.txt"));
-        assert_eq!(fs::read_to_string(root.join("notes.txt/notes.txt"))?, "sample");
+        assert_eq!(app.status.as_deref(), Some("Extracted to notes.txt-extracted"));
+        assert_eq!(fs::read_to_string(root.join("notes.txt-extracted/notes.txt"))?, "sample");
         fs::remove_dir_all(root)?;
         Ok(())
     }
