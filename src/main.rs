@@ -128,6 +128,7 @@ struct App {
     selection: Selection,
     scroll: usize,
     typed: String,
+    command: Option<String>,
     last_typed: Option<Instant>,
     error: Option<String>,
     running: bool,
@@ -148,6 +149,7 @@ impl App {
             selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
+            command: None,
             last_typed: None,
             error: None,
             running: true,
@@ -263,13 +265,64 @@ impl App {
         self.clear_typed();
     }
 
+    fn handle_command_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            // Escape only cancels command entry; it never exits rzpk.
+            KeyCode::Esc => self.command = None,
+            KeyCode::Enter => {
+                let command = self.command.take().unwrap_or_default();
+                if command.trim() == "q" {
+                    self.running = false;
+                } else {
+                    self.error = Some(format!("unknown command: :{command}"));
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(command) = self.command.as_mut() {
+                    command.pop();
+                }
+            }
+            KeyCode::Char(ch) if !ctrl && !alt => {
+                if let Some(command) = self.command.as_mut()
+                    && command.len() < 64
+                {
+                    command.push(ch);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+        // Ctrl+C always quits, even in command mode.
+        if key.code == KeyCode::Char('c') && ctrl {
+            self.running = false;
+            return;
+        }
+
+        if self.command.is_some() {
+            self.handle_command_key(key);
+            return;
+        }
+
         match key.code {
-            KeyCode::Esc => self.running = false,
-            KeyCode::Char('c') if ctrl => self.running = false,
+            // Clear all current marks without exiting or changing the cursor.
+            KeyCode::Esc => {
+                self.selection.clear();
+                self.clear_typed();
+            }
+            // Colon enters command mode regardless of the terminal's Shift reporting.
+            KeyCode::Char(':') if !ctrl && !alt => {
+                self.command = Some(String::new());
+                self.clear_typed();
+                self.error = None;
+            }
             KeyCode::Backspace => {
                 if let Err(error) = self.parent() {
                     self.error = Some(error.to_string());
@@ -317,7 +370,12 @@ impl App {
                 Style::default().fg(Color::Rgb(91, 205, 160)),
             ));
         }
-        if !self.typed.is_empty() {
+        if let Some(command) = &self.command {
+            title.push(Span::styled(
+                format!("  :{command}█"),
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if !self.typed.is_empty() {
             title.push(Span::styled(
                 format!("  /{}", self.typed),
                 Style::default().fg(Color::Yellow),
@@ -447,6 +505,7 @@ mod tests {
             selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
+            command: None,
             last_typed: None,
             error: None,
             running: true,
@@ -608,6 +667,90 @@ mod tests {
         single.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
         assert_eq!(single.selected, 0);
         assert_eq!(single.selection.count(), 0);
+    }
+
+    #[test]
+    fn escape_clears_disjoint_and_range_marks_but_never_quits() {
+        let mut app = app((0..6).map(|i| sample(&format!("file{i}"), false)).collect());
+        app.selection.toggle(0);
+        app.selected = 2;
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(app.selection.count(), 3);
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 0);
+        assert_eq!(app.selected, 3);
+        assert!(app.running);
+
+        // Esc remains harmless if there are no marks.
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.running);
+    }
+
+    #[test]
+    fn ctrl_c_quits_with_or_without_selection() {
+        for marked in [false, true] {
+            let mut app = app(vec![sample("file", false)]);
+            if marked {
+                app.selection.toggle(0);
+            }
+            app.handle_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+            assert!(!app.running);
+        }
+    }
+
+    #[test]
+    fn colon_q_enter_quits_and_never_runs_filename_search() {
+        let mut app = app(vec![sample("quit", false), sample("README.md", false)]);
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        assert_eq!(app.command.as_deref(), Some(""));
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert_eq!(app.command.as_deref(), Some("q"));
+        assert_eq!(app.selected, 0);
+        assert!(app.typed.is_empty());
+        assert!(app.running);
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.running);
+        assert!(app.command.is_none());
+    }
+
+    #[test]
+    fn escape_dismisses_command_without_losing_selection() {
+        let mut app = app(vec![sample("file", false)]);
+        app.selection.toggle(0);
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.running);
+        assert!(app.command.is_none());
+        assert_eq!(app.selection.count(), 1);
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 0);
+        assert!(app.running);
+    }
+
+    #[test]
+    fn command_supports_backspace_and_reports_unknown_commands() {
+        let mut app = app(vec![sample("file", false)]);
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::NONE));
+        assert_eq!(app.command.as_deref(), Some("q"));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.running);
+        assert_eq!(app.error.as_deref(), Some("unknown command: :x"));
+        assert!(app.command.is_none());
+    }
+
+    #[test]
+    fn ctrl_c_also_quits_during_command_entry() {
+        let mut app = app(vec![sample("file", false)]);
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(!app.running);
     }
 
     #[test]
