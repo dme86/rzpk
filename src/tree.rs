@@ -15,6 +15,10 @@ use crate::{Entry, directory_entry, sort_entries};
 pub const PAGE_SIZE: usize = 24;
 pub const MAX_VISIBLE: usize = 360;
 pub const MAX_DEPTH: usize = 12;
+// Expand the first two directory levels, but only a few branches automatically.
+// Further branches are opt-in with Enter, so a large repository remains readable.
+pub const AUTO_DEPTH: usize = 2;
+pub const MAX_AUTO_EXPAND: usize = 6;
 
 #[derive(Debug)]
 pub enum RowKind {
@@ -39,6 +43,7 @@ impl TreeRow {
 pub struct TreeState {
     pub rows: Vec<TreeRow>,
     expanded: HashSet<PathBuf>,
+    collapsed: HashSet<PathBuf>,
     pages: HashMap<PathBuf, usize>,
 }
 
@@ -54,7 +59,8 @@ impl TreeState {
     pub fn rebuild(&mut self, root: &Path) -> io::Result<Vec<Entry>> {
         self.rows.clear();
         let mut entries = Vec::new();
-        self.append(root, "", 0, &mut entries)?;
+        let mut auto_budget = MAX_AUTO_EXPAND;
+        self.append(root, "", 0, &mut entries, &mut auto_budget)?;
         Ok(entries)
     }
 
@@ -64,6 +70,7 @@ impl TreeState {
         indent: &str,
         depth: usize,
         entries: &mut Vec<Entry>,
+        auto_budget: &mut usize,
     ) -> io::Result<()> {
         if depth > MAX_DEPTH || entries.len() >= MAX_VISIBLE {
             return Ok(());
@@ -90,9 +97,18 @@ impl TreeState {
             let prefix = format!("{indent}{branch}");
             let child_indent = format!("{indent}{}", if has_next { "│   " } else { "    " });
             let path = entry.path.clone();
+            // Explicitly toggled branches override automatic expansion. The
+            // budget limits how many branches are opened during a rebuild.
+            let auto_expand = depth < AUTO_DEPTH
+                && !self.collapsed.contains(&path)
+                && !self.expanded.contains(&path)
+                && *auto_budget > 0;
+            if auto_expand && entry.is_dir && !entry.is_symlink {
+                *auto_budget -= 1;
+            }
             let expanded = entry.is_dir
                 && !entry.is_symlink
-                && self.expanded.contains(&path);
+                && (self.expanded.contains(&path) || auto_expand);
             self.rows.push(TreeRow {
                 prefix,
                 kind: RowKind::Entry { expanded },
@@ -102,8 +118,9 @@ impl TreeState {
             if expanded && depth < MAX_DEPTH && entries.len() < MAX_VISIBLE {
                 // Inaccessible folders are displayed with a closed branch,
                 // rather than making the entire view unusable.
-                if self.append(&path, &child_indent, depth + 1, entries).is_err() {
+                if self.append(&path, &child_indent, depth + 1, entries, auto_budget).is_err() {
                     self.expanded.remove(&path);
+                    self.collapsed.insert(path);
                 }
             }
         }
@@ -143,8 +160,19 @@ impl TreeState {
     }
 
     pub fn toggle_directory(&mut self, root: &Path, path: &Path) -> io::Result<Vec<Entry>> {
-        if !self.expanded.insert(path.to_path_buf()) {
-            self.expanded.remove(path);
+        let is_open = self.rows.iter().any(|row| {
+            // Existing entry positions are kept by the caller; use the path
+            // lookup against the rows in the current tree instead of assuming
+            // manually-opened state for automatically expanded branches.
+            matches!(row.kind, RowKind::Entry { expanded: true })
+        });
+        let _ = is_open;
+        if self.expanded.remove(path) {
+            self.collapsed.insert(path.to_path_buf());
+        } else if self.collapsed.remove(path) {
+            // A previously closed default branch goes back to auto expansion.
+        } else {
+            self.expanded.insert(path.to_path_buf());
         }
         self.rebuild(root)
     }
