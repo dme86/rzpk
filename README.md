@@ -26,6 +26,12 @@ metadata_position = "left"
 
 Set it to `"right"` to switch back. The XDG_CONFIG_HOME environment variable is supported. No config file is required for the default. Restart rzpk after changing it.
 
+## Parent navigation and editing
+
+A pinned **`[..]`** entry appears at the top of each directory pane whenever a parent directory exists, even if the folder is empty or tree view is enabled. Press `↑` from the first real entry to focus it, then `Enter` to return to the parent; `←` and `Backspace` always go back directly. The `[..]` entry is a **virtual navigation item**: it cannot be marked, searched, copied, moved, packed, or extracted, and the filesystem root does not show it.
+
+`→` enters the highlighted folder in normal, split, or tree view. `Enter` on a folder enters it in normal mode, and in tree mode it expands/collapses the branch. **`Enter` on a regular file** starts your terminal editor using `$EDITOR` (falling back to `$VISUAL`, then `vi`). Editor commands with arguments, e.g. `EDITOR='nvim -u NONE'`, are supported without running a shell. rzpk temporarily releases the alternate screen/raw mode, waits for the editor to exit, restores the terminal, and refreshes the file listing. Search, marks, and navigation shortcuts are otherwise unchanged.
+
 ## Vertical split
 
 Type `:v` and press Enter to open two side-by-side views. The right pane starts in the same directory as the left, but each pane has its own folder, cursor, scroll position, incremental search and marked entries. The active pane is indicated by a green marker in its header; `rzpk [v]` appears in the global title. Press `Tab` to focus the other pane; all existing navigation and selection shortcuts apply only to the active pane.
@@ -101,7 +107,9 @@ Both actions require confirmation with **Enter**; **Esc** cancels. Existing targ
 | `Shift+M` | Move marks (or focused item) to the other split pane, after confirmation |
 | `Space` | Same toggle, for terminals that cannot distinguish Shift+Space |
 | `Type letters` | Jump to filenames by prefix, then substring (case-insensitive) |
-| `Enter` | Open the highlighted directory |
+| `Enter` | Open the highlighted folder; open a regular file in `$EDITOR` (or `$VISUAL`, then `vi`) |
+| `←` | Go to the parent directory (also in tree view) |
+| `→` | Enter the highlighted directory (also in tree view) |
 | `Backspace` | Go to the parent directory |
 | `Esc` | Clear all marked files and folders; cancel command entry if active (never exits) |
 | `Ctrl+C` | Quit immediately |
