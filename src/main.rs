@@ -410,12 +410,9 @@ impl App {
         } else {
             // Open the right pane in the same folder, but with independent
             // cursor, selection, search, scroll and navigation.
-            let mut right = PaneState::open(&self.cwd)?;
+            let mut right = PaneState::open_mode(&self.cwd, self.tree_mode)?;
             if self.preview_mode {
                 right.refresh_preview();
-            }
-            if self.tree_mode {
-                right.enable_tree()?;
             }
             self.other = Some(right);
             self.active_right = false;
