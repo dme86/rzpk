@@ -10,6 +10,7 @@ mod commands;
 mod config;
 mod details;
 mod fileops;
+mod focus;
 mod jobs;
 mod jumps;
 mod pane;
@@ -24,6 +25,7 @@ use commands::{Action, CommandAction, action_for, command_for, draw_help, help_m
 use config::{Config, MetadataPosition};
 use details::permissions;
 use fileops::{Transfer, TransferKind};
+use focus::FocusHistory;
 use jobs::{Poll as JobPoll, RunningJob, Work};
 use jumps::Jumps;
 use render::maximum_name_width;
@@ -206,6 +208,7 @@ struct App {
     jumps: Jumps,
     selected: usize,
     parent_focused: bool,
+    focus_history: FocusHistory,
     selection: Selection,
     scroll: usize,
     typed: String,
@@ -248,6 +251,7 @@ impl App {
             jumps,
             selected: 0,
             parent_focused: false,
+            focus_history: FocusHistory::default(),
             selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
@@ -300,22 +304,45 @@ impl App {
     }
 
     fn change_directory(&mut self, cwd: PathBuf, focus: Option<&Path>) -> io::Result<()> {
+        // Load first: an inaccessible destination must not disturb the current
+        // pane or overwrite its last remembered focus.
         let (tree, entries) = if self.tree_mode {
             let (tree, entries) = TreeState::open(&cwd)?;
             (Some(tree), entries)
         } else {
             (None, read_directory(&cwd)?)
         };
+
+        // A parent navigation explicitly focuses the child directory; for
+        // ordinary re-entry or jumps, restore the last file focused here.
+        let remembered = self.focus_history.recall(&cwd);
+        let explicit = focus.and_then(|path| entries.iter().position(|entry| entry.path == path));
+        let restored = remembered.and_then(|state| entries.iter()
+            .position(|entry| entry.path == state.entry));
+        let selected = explicit.or(restored).unwrap_or(0);
+        let scroll = if explicit.is_none() && restored.is_some() {
+            remembered.map_or(0, |state| state.scroll)
+        } else {
+            0
+        };
+
+        // Save only real entries. Focusing [..] must not replace a previously
+        // remembered file with the underlying zero-based list entry.
+        if !self.parent_focused
+            && self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected))
+            && let Some(entry) = self.entries.get(self.selected)
+        {
+            self.focus_history.remember(&self.cwd, &entry.path, self.scroll);
+        }
+
         self.cwd = cwd;
         self.entries = entries;
         self.max_name_width = maximum_name_width(&self.entries);
         self.tree = tree;
-        self.selected = focus
-            .and_then(|path| self.entries.iter().position(|entry| entry.path == path))
-            .unwrap_or(0);
+        self.selected = selected;
         self.parent_focused = false;
         self.selection.clear();
-        self.scroll = 0;
+        self.scroll = scroll;
         self.clear_typed();
         self.error = None;
         self.refresh_active_preview();
@@ -524,6 +551,7 @@ impl App {
         std::mem::swap(&mut self.max_name_width, &mut other.max_name_width);
         std::mem::swap(&mut self.selected, &mut other.selected);
         std::mem::swap(&mut self.parent_focused, &mut other.parent_focused);
+        std::mem::swap(&mut self.focus_history, &mut other.focus_history);
         std::mem::swap(&mut self.selection, &mut other.selection);
         std::mem::swap(&mut self.scroll, &mut other.scroll);
         std::mem::swap(&mut self.typed, &mut other.typed);
@@ -1465,6 +1493,7 @@ mod tests {
             entries,
             selected: 0,
             parent_focused: false,
+            focus_history: FocusHistory::default(),
             selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
