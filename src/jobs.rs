@@ -68,19 +68,25 @@ impl Snapshot {
 /// Count bytes as they are actually read, not while estimating the job.
 pub struct TrackedReader<R> {
     inner: R,
-    progress: Arc<Progress>,
+    progress: Option<Arc<Progress>>,
 }
 
 impl<R> TrackedReader<R> {
     pub fn new(inner: R, progress: &Arc<Progress>) -> Self {
-        Self { inner, progress: Arc::clone(progress) }
+        Self::optional(inner, Some(progress))
+    }
+
+    pub fn optional(inner: R, progress: Option<&Arc<Progress>>) -> Self {
+        Self { inner, progress: progress.cloned() }
     }
 }
 
 impl<R: Read> Read for TrackedReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let count = self.inner.read(buf)?;
-        self.progress.bytes_done(count as u64);
+        if let Some(progress) = &self.progress {
+            progress.bytes_done(count as u64);
+        }
         Ok(count)
     }
 }
@@ -93,14 +99,24 @@ pub struct TrackedWriter<W> {
 
 impl<W> TrackedWriter<W> {
     pub fn new(inner: W, progress: &Arc<Progress>) -> Self {
-        Self { inner, progress: Arc::clone(progress) }
+        Self::optional(inner, Some(progress))
+    }
+
+    pub fn optional(inner: W, progress: Option<&Arc<Progress>>) -> Self {
+        Self { inner, progress: progress.cloned() }
+    }
+
+    pub fn into_inner(self) -> W {
+        self.inner
     }
 }
 
 impl<W: Write> Write for TrackedWriter<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let count = self.inner.write(bytes)?;
-        self.progress.bytes_done(count as u64);
+        if let Some(progress) = &self.progress {
+            progress.bytes_done(count as u64);
+        }
         Ok(count)
     }
 
