@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+mod archive;
+mod commands;
 mod config;
 mod details;
 mod fileops;
@@ -13,6 +15,8 @@ mod render;
 mod selection;
 mod tree;
 
+use archive::ArchiveJob;
+use commands::{Action, CommandAction, action_for, command_for, draw_help, help_max_scroll};
 use config::{Config, MetadataPosition};
 use details::permissions;
 use fileops::{Transfer, TransferKind};
@@ -178,6 +182,9 @@ struct App {
     active_right: bool,
     pending_transfer: Option<Transfer>,
     status: Option<String>,
+    pending_archive: Option<ArchiveJob>,
+    help_open: bool,
+    help_scroll: usize,
 }
 
 impl App {
@@ -207,6 +214,9 @@ impl App {
             active_right: false,
             pending_transfer: None,
             status: None,
+            pending_archive: None,
+            help_open: false,
+            help_scroll: 0,
         })
     }
 
@@ -605,29 +615,124 @@ impl App {
         frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), dialog);
     }
 
+    fn start_archive(&mut self, extract: bool) {
+        let marked = self.selection.count() > 0;
+        let sources = self.entries.iter().enumerate()
+            .filter(|(index, _)| if marked { self.selection.contains(*index) } else { *index == self.selected })
+            .filter(|(index, _)| self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
+            .map(|(_, entry)| entry.path.clone())
+            .collect::<Vec<_>>();
+        let result = if extract {
+            if sources.len() != 1 {
+                Err(io::Error::new(io::ErrorKind::InvalidInput, "Select one archive to extract"))
+            } else {
+                ArchiveJob::new_unpack(sources[0].clone(), &self.cwd)
+            }
+        } else {
+            ArchiveJob::new_pack(sources, &self.cwd)
+        };
+        match result {
+            Ok(job) => {
+                self.pending_archive = Some(job);
+                self.error = None;
+                self.status = None;
+                self.clear_typed();
+            }
+            Err(error) => {
+                self.status = None;
+                self.error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn handle_archive_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.pending_archive = None,
+            KeyCode::Enter => {
+                if let Some(job) = self.pending_archive.take() {
+                    let result = job.execute();
+                    let refresh = self.refresh_after_transfer();
+                    match (result, refresh) {
+                        (Ok(status), Ok(())) => {
+                            self.error = None;
+                            self.status = Some(status);
+                            self.selection.clear();
+                        }
+                        (Err(error), _) | (_, Err(error)) => {
+                            self.status = None;
+                            self.error = Some(format!("Archive operation failed: {error}"));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_archive_dialog(&self, frame: &mut Frame, area: Rect) {
+        let Some(job) = self.pending_archive.as_ref() else { return };
+        let width = area.width.saturating_sub(2).min(76);
+        let height = area.height.saturating_sub(2).min(9);
+        if width < 12 || height < 4 { return; }
+        let dialog = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width, height,
+        );
+        let lines = vec![
+            Line::from(format!("  {}", job.summary())),
+            Line::from(""),
+            Line::from(format!("  Destination: {}", job.target().display())),
+            Line::from(""),
+            Line::styled(
+                "  Enter: confirm     Esc: cancel",
+                Style::default().fg(Color::Rgb(184, 187, 38)),
+            ),
+        ];
+        let block = Block::default()
+            .title(" Archive confirmation ")
+            .title_style(Style::default().fg(Color::Rgb(250, 189, 47)))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(146, 131, 116)))
+            .style(Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Rgb(235, 219, 178)));
+        frame.render_widget(Clear, dialog);
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), dialog);
+    }
+
+    fn draw_overlays(&self, frame: &mut Frame, area: Rect) {
+        self.draw_transfer_dialog(frame, area);
+        self.draw_archive_dialog(frame, area);
+        if self.help_open {
+            draw_help(frame, area, self.help_scroll);
+        }
+    }
+
     fn handle_command_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
-            // Escape only cancels command entry; it never exits rzpk.
             KeyCode::Esc => self.command = None,
             KeyCode::Enter => {
                 let command = self.command.take().unwrap_or_default();
-                match command.trim() {
-                    "q" => self.running = false,
-                    "v" => {
+                match command_for(&command) {
+                    Some(CommandAction::Quit) => self.running = false,
+                    Some(CommandAction::Vertical) => {
                         if let Err(error) = self.toggle_vertical_split() {
                             self.error = Some(error.to_string());
                         }
                     }
-                    "p" => self.toggle_preview(),
-                    "t" => {
+                    Some(CommandAction::Preview) => self.toggle_preview(),
+                    Some(CommandAction::Tree) => {
                         if let Err(error) = self.toggle_tree() {
                             self.error = Some(error.to_string());
                         }
-                    },
-                    "n" => self.normal_mode(),
-                    _ => self.error = Some(format!("unknown command: :{command}")),
+                    }
+                    Some(CommandAction::Normal) => self.normal_mode(),
+                    Some(CommandAction::Copy) => self.start_transfer(TransferKind::Copy),
+                    Some(CommandAction::Move) => self.start_transfer(TransferKind::Move),
+                    Some(CommandAction::Archive) => self.start_archive(false),
+                    Some(CommandAction::Extract) => self.start_archive(true),
+                    None => self.error = Some(format!("unknown command: :{command}")),
                 }
             }
             KeyCode::Backspace => {
@@ -647,67 +752,70 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-        // Ctrl+C always quits, even in command mode.
-        if key.code == KeyCode::Char('c') && ctrl {
+        if action_for(key) == Some(Action::Quit) {
             self.running = false;
             return;
         }
 
+        if self.help_open {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') => self.help_open = false,
+                KeyCode::Up | KeyCode::Char('k') => self.help_scroll = self.help_scroll.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.help_scroll = (self.help_scroll + 1).min(help_max_scroll(40));
+                }
+                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(8),
+                KeyCode::PageDown => self.help_scroll = (self.help_scroll + 8).min(help_max_scroll(40)),
+                _ => {}
+            }
+            return;
+        }
+
+        if self.pending_archive.is_some() {
+            self.handle_archive_key(key);
+            return;
+        }
         if self.pending_transfer.is_some() {
             self.handle_transfer_key(key);
             return;
         }
-
         if self.command.is_some() {
             self.handle_command_key(key);
             return;
         }
 
-        match key.code {
-            // Clear all current marks without exiting or changing the cursor.
-            KeyCode::Esc => {
-                self.selection.clear();
-                self.clear_typed();
+        match action_for(key) {
+            Some(Action::Help) => { self.help_open = true; self.help_scroll = 0; self.clear_typed(); }
+            Some(Action::Command) => { self.command = Some(String::new()); self.clear_typed(); self.error = None; }
+            Some(Action::SwitchPane) => self.switch_pane(),
+            Some(Action::Parent) => {
+                if let Err(error) = self.parent() { self.error = Some(error.to_string()); }
             }
-            // Colon enters command mode regardless of the terminal's Shift reporting.
-            KeyCode::Char(':') if !ctrl && !alt => {
-                self.command = Some(String::new());
-                self.clear_typed();
-                self.error = None;
+            Some(Action::Open) => {
+                if let Err(error) = self.open_selected() { self.error = Some(error.to_string()); }
             }
-            KeyCode::Tab | KeyCode::BackTab if !ctrl && !alt => self.switch_pane(),
-            KeyCode::Backspace => {
-                if let Err(error) = self.parent() {
-                    self.error = Some(error.to_string());
+            Some(Action::Up) => self.move_cursor(-1, false),
+            Some(Action::Down) => self.move_cursor(1, false),
+            Some(Action::MarkUp) => self.move_cursor(-1, true),
+            Some(Action::MarkDown) => self.move_cursor(1, true),
+            Some(Action::Mark) => self.toggle_current(),
+            Some(Action::Clear) => { self.selection.clear(); self.clear_typed(); }
+            Some(Action::Copy) => self.start_transfer(TransferKind::Copy),
+            Some(Action::Move) => self.start_transfer(TransferKind::Move),
+            Some(Action::Archive) => self.start_archive(false),
+            Some(Action::Extract) => self.start_archive(true),
+            Some(Action::Quit) => self.running = false,
+            None => {
+                if let KeyCode::Char(ch) = key.code
+                    && !shift && !ctrl && !alt
+                {
+                    self.jump_to(ch);
                 }
             }
-            KeyCode::Enter => {
-                if let Err(error) = self.open_selected() {
-                    self.error = Some(error.to_string());
-                }
-            }
-            KeyCode::Up if !ctrl && !alt => self.move_cursor(-1, shift),
-            KeyCode::Down if !ctrl && !alt => self.move_cursor(1, shift),
-            // Uppercase J/K also works when a terminal omits the Shift modifier.
-            KeyCode::Char('J') if !ctrl && !alt => self.move_cursor(1, true),
-            KeyCode::Char('K') if !ctrl && !alt => self.move_cursor(-1, true),
-            KeyCode::Char('j') if shift && !ctrl && !alt => self.move_cursor(1, true),
-            KeyCode::Char('k') if shift && !ctrl && !alt => self.move_cursor(-1, true),
-            // crossterm reports shifted characters either as uppercase
-            // without modifiers or lowercase with SHIFT, depending on terminal.
-            KeyCode::Char('C') if !ctrl && !alt => self.start_transfer(TransferKind::Copy),
-            KeyCode::Char('c') if shift && !ctrl && !alt => self.start_transfer(TransferKind::Copy),
-            KeyCode::Char('M') if !ctrl && !alt => self.start_transfer(TransferKind::Move),
-            KeyCode::Char('m') if shift && !ctrl && !alt => self.start_transfer(TransferKind::Move),
-            // A few terminals report Shift+Space as plain Space. Accept both.
-            KeyCode::Char(' ') if !ctrl && !alt => self.toggle_current(),
-            // Typed search must never swallow Shift-modified keys.
-            KeyCode::Char(ch) if !shift && !ctrl && !alt => self.jump_to(ch),
-            _ => {}
         }
     }
 
@@ -795,14 +903,14 @@ impl App {
 
         let Some(other) = self.other.as_mut() else {
             draw_pane_content(frame, content, &mut current, self.metadata_position, true, self.preview_mode);
-            self.draw_transfer_dialog(frame, area);
+            self.draw_overlays(frame, area);
             return;
         };
         let mut inactive = other.view();
 
         if !use_two_columns(area.width) {
             draw_split_pane(frame, content, &mut current, self.metadata_position, true, self.preview_mode);
-            self.draw_transfer_dialog(frame, area);
+            self.draw_overlays(frame, area);
             return;
         }
 
@@ -833,7 +941,7 @@ impl App {
             draw_split_pane(frame, left, &mut current, self.metadata_position, true, self.preview_mode);
             draw_split_pane(frame, right, &mut inactive, self.metadata_position, false, self.preview_mode);
         }
-        self.draw_transfer_dialog(frame, area);
+        self.draw_overlays(frame, area);
     }
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -919,6 +1027,9 @@ mod tests {
             active_right: false,
             pending_transfer: None,
             status: None,
+            pending_archive: None,
+            help_open: false,
+            help_scroll: 0,
         }
     }
 
