@@ -38,9 +38,14 @@ pub struct PaneState {
 }
 
 impl PaneState {
-    /// The new pane opens the same folder, with independent cursor and marks.
-    pub fn open(cwd: &Path) -> io::Result<Self> {
-        let entries = read_directory(cwd)?;
+    /// A tree pane starts from a bounded first page, never a full directory scan.
+    pub fn open_mode(cwd: &Path, tree_enabled: bool) -> io::Result<Self> {
+        let (tree, entries) = if tree_enabled {
+            let (tree, entries) = TreeState::open(cwd)?;
+            (Some(tree), entries)
+        } else {
+            (None, read_directory(cwd)?)
+        };
         let max_name_width = maximum_name_width(&entries);
         Ok(Self {
             cwd: cwd.to_path_buf(),
@@ -53,7 +58,7 @@ impl PaneState {
             last_typed: None,
             error: None,
             preview: None,
-            tree: None,
+            tree,
         })
     }
 
@@ -70,12 +75,6 @@ impl PaneState {
             preview: self.preview.as_ref(),
             tree_rows: self.tree.as_ref().map(|tree| tree.rows.as_slice()),
         }
-    }
-
-    pub fn enable_tree(&mut self) -> io::Result<()> {
-        let (tree, entries) = TreeState::open(&self.cwd)?;
-        self.enable_tree_with_entries(tree, entries);
-        Ok(())
     }
 
     pub fn enable_tree_with_entries(&mut self, tree: TreeState, entries: Vec<Entry>) {
