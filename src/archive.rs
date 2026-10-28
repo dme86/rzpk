@@ -113,6 +113,7 @@ impl ArchiveJob {
         }
     }
 
+    #[cfg(test)]
     pub fn execute(&self) -> io::Result<String> {
         self.execute_internal(None)
     }
