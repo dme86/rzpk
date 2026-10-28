@@ -14,7 +14,7 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Help, Quit, Command, SwitchPane, Parent, Open, Up, Down,
-    MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract,
+    MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs,
 }
 
 #[derive(Clone, Copy)]
@@ -80,10 +80,11 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "Shift+M", description: "Move to other pane", action: Action::Move, input: Input::ShiftLetter('m'), section: "FILES" },
     Binding { label: "Shift+A", description: "Create a .tar.gz archive", action: Action::Archive, input: Input::ShiftLetter('a'), section: "FILES" },
     Binding { label: "Shift+E", description: "Extract the selected archive", action: Action::Extract, input: Input::ShiftLetter('e'), section: "FILES" },
+    Binding { label: "Shift+Q", description: "Open the job queue (Del removes waiting jobs)", action: Action::Jobs, input: Input::ShiftLetter('q'), section: "FILES" },
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, Copy, Move, Archive, Extract }
+pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, Copy, Move, Archive, Extract, Jobs }
 
 pub struct Command {
     pub name: &'static str,
@@ -101,6 +102,7 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "mv", description: "Move to other pane", action: CommandAction::Move },
     Command { name: "archive", description: "Create a .tar.gz archive", action: CommandAction::Archive },
     Command { name: "extract", description: "Extract selected archive", action: CommandAction::Extract },
+    Command { name: "jobs", description: "Show and manage the file-operation queue", action: CommandAction::Jobs },
 ];
 
 pub fn action_for(key: KeyEvent) -> Option<Action> {
