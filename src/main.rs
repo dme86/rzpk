@@ -2203,19 +2203,22 @@ mod tests {
     #[test]
     fn failed_waiting_job_does_not_prevent_following_jobs() -> io::Result<()> {
         let (mut app, root) = transfer_fixture()?;
-        // First and second jobs target the same path. The second must fail
-        // safely, while the third can still create the archive.
-        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
-        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        // First copy runs, second references a file removed before it starts,
+        // and the third packs a different file. No timing-sensitive collisions.
         app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         app.selected = 1;
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        app.selected = 0;
         app.handle_key(key(KeyCode::Char('A'), KeyModifiers::SHIFT));
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.queue.len(), 2);
+        fs::remove_file(root.join("left/second.rs"))?;
         complete_job(&mut app)?;
         assert_eq!(fs::read_to_string(root.join("right/copy.txt"))?, "example");
-        assert!(root.join("left/second.rs.tar.gz").exists());
+        assert!(!root.join("right/second.rs").exists());
+        assert!(root.join("left/copy.txt.tar.gz").exists());
         assert!(app.queue.is_empty());
         fs::remove_dir_all(root)?;
         Ok(())
