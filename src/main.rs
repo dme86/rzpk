@@ -2361,6 +2361,91 @@ mod tests {
     }
 
     #[test]
+    fn typing_double_dot_focuses_parent_and_enter_navigates_up() -> io::Result<()> {
+        let root = split_fixture()?;
+        let child = root.join("alpha");
+        let mut app = app(read_directory(&child)?);
+        app.cwd = child;
+
+        app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert_eq!(app.typed, ".");
+        assert!(!app.parent_focused);
+
+        app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert_eq!(app.typed, "..");
+        assert!(app.parent_focused);
+
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        assert!(!app.parent_focused);
+        assert_eq!(app.entries[app.selected].name, "alpha");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn double_dot_works_even_when_hidden_files_match_first_dot() -> io::Result<()> {
+        let root = split_fixture()?;
+        fs::write(root.join(".hidden"), "secret")?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+
+        app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert_eq!(app.entries[app.selected].name, ".hidden");
+        assert!(!app.parent_focused);
+
+        app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        // Ordinary name search from the parent row still works.
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(!app.parent_focused);
+        assert_eq!(app.entries[app.selected].name, "notes.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn double_dot_is_pane_local_and_works_in_tree_mode() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_tree()?;
+        app.toggle_vertical_split()?;
+
+        for _ in 0..2 {
+            app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        }
+        assert!(app.parent_focused);
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(!app.parent_focused);
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        assert_eq!(app.cwd, root);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn double_dot_respects_search_timeout_and_filesystem_root() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+
+        app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        app.last_typed = Some(Instant::now() - TYPE_TIMEOUT - Duration::from_millis(1));
+        app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert!(!app.parent_focused);
+        assert_eq!(app.typed, ".");
+
+        app.cwd = PathBuf::from("/");
+        app.handle_key(key(KeyCode::Char('.'), KeyModifiers::NONE));
+        assert!(!app.parent_focused);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn left_right_keys_navigate_directories_without_search() -> io::Result<()> {
         let root = split_fixture()?;
         let mut app = app(read_directory(&root)?);
