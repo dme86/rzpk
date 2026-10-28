@@ -223,7 +223,6 @@ impl App {
             help_scroll: 0,
             help_view_height: 24,
             job: None,
-            job: None,
         })
     }
 
@@ -1143,6 +1142,7 @@ mod tests {
             help_open: false,
             help_scroll: 0,
             help_view_height: 24,
+            job: None,
         }
     }
 
