@@ -26,6 +26,26 @@ metadata_position = "left"
 
 Set it to `"right"` to switch back. The XDG_CONFIG_HOME environment variable is supported. No config file is required for the default. Restart rzpk after changing it.
 
+## Directory jumps
+
+Save up to **nine directory jumps** (slots 1–9) to switch instantly to frequently used paths such as `~/.config`, `/etc`, or project directories. Jumps work in normal, split, tree and preview modes and always change **only the active pane**.
+
+- `:jset 1` saves the current pane's directory to slot 1 (replace `1` with any digit 1–9).
+- **Alt+1** jumps to slot 1; **Cmd+1** works when the terminal forwards the Super/Command modifier rather than intercepting the shortcut.
+- `:j1` is a terminal-independent alternative (similarly `:j2` through `:j9`).
+- `:jdel 1` deletes slot 1.
+
+Jumps are stored in the existing `~/.config/rzpk/config.toml` (or `$XDG_CONFIG_HOME/rzpk/config.toml`) and survive restarts. rzpk preserves existing config comments when saving from `:jset` or `:jdel`. You can edit jump paths directly:
+
+```toml
+[jumps]
+1 = "~/.config"
+2 = "/etc"
+3 = "~/projects/my-very-long-project-name"
+```
+
+When at least one slot is defined, a compact Gruvbox jump strip appears at the top of each pane, such as `↗ 1 ~/.config  2 /etc  3 …/my-project`. It abbreviates home directories, shortens long path names and shows `+N` if not all slots fit. The slot matching the current pane is highlighted. Missing or inaccessible jump targets produce an error without changing the active directory. Terminal applications cannot reliably intercept macOS Command shortcuts: configure your terminal to forward Cmd+digits, or use Alt+digits / `:j1`.
+
 ## Parent navigation and editing
 
 A pinned **`[..]`** entry appears at the top of each directory pane whenever a parent directory exists, even if the folder is empty or tree view is enabled. Press `↑` from the first real entry **or type `..`** to focus it, then `Enter` to return to the parent; `←` and `Backspace` always go back directly. Typing `..` uses the same incremental-search timeout as ordinary filenames; a single `.` can still match hidden files. The `[..]` entry is a **virtual navigation item**: it cannot be marked, searched, copied, moved, packed, or extracted, and the filesystem root does not show it.
