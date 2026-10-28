@@ -233,6 +233,8 @@ struct App {
     queue_open: bool,
     queue_selected: usize,
     pending_edit: Option<PathBuf>,
+    key_test_open: bool,
+    last_test_key: Option<KeyEvent>,
 }
 
 impl App {
@@ -276,6 +278,8 @@ impl App {
             queue_open: false,
             queue_selected: 0,
             pending_edit: None,
+            key_test_open: false,
+            last_test_key: None,
         })
     }
 
@@ -977,6 +981,52 @@ impl App {
         frame.render_widget(Paragraph::new(lines).block(block), dialog);
     }
 
+    fn draw_key_test_dialog(&self, frame: &mut Frame, area: Rect) {
+        if !self.key_test_open || area.width < 26 || area.height < 7 {
+            return;
+        }
+        let width = area.width.saturating_sub(2).min(74);
+        let height = area.height.saturating_sub(2).min(9);
+        let rect = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
+        let normal = Style::default().fg(Color::Rgb(235, 219, 178));
+        let muted = Style::default().fg(Color::Rgb(146, 131, 116));
+        let lines = if let Some(key) = self.last_test_key {
+            let resolved = match action_for(key) {
+                Some(Action::Jump(slot)) => format!("Jump {slot} recognized"),
+                _ => "Not a jump shortcut".to_owned(),
+            };
+            vec![
+                Line::raw(""),
+                Line::styled(format!("  Key:       {:?}", key.code), normal),
+                Line::styled(format!("  Modifiers: {:?}", key.modifiers), normal),
+                Line::styled(format!("  Result:    {resolved}"), Style::default().fg(Color::Rgb(184, 187, 38))),
+                Line::raw(""),
+                Line::styled("  Press another key · Esc closes", muted),
+            ]
+        } else {
+            vec![
+                Line::raw(""),
+                Line::styled("  Press Cmd/Option + 1..9", normal),
+                Line::raw(""),
+                Line::styled("  No event received yet.", muted),
+                Line::styled("  Esc closes", muted),
+            ]
+        };
+        let block = Block::default()
+            .title(" Keyboard diagnostics ")
+            .title_style(Style::default().fg(Color::Rgb(250, 189, 47)))
+            .borders(Borders::ALL)
+            .border_style(muted)
+            .style(Style::default().bg(Color::Rgb(40, 40, 40)));
+        frame.render_widget(Clear, rect);
+        frame.render_widget(Paragraph::new(lines).block(block), rect);
+    }
+
     fn draw_overlays(&self, frame: &mut Frame, area: Rect) {
         self.draw_transfer_dialog(frame, area);
         self.draw_archive_dialog(frame, area);
@@ -984,6 +1034,7 @@ impl App {
         if self.help_open {
             draw_help(frame, area, self.help_scroll);
         }
+        self.draw_key_test_dialog(frame, area);
     }
 
     fn jump_to_slot(&mut self, slot: u8) {
@@ -1073,6 +1124,7 @@ impl App {
                     Some(CommandAction::Archive) => self.start_archive(false),
                     Some(CommandAction::Extract) => self.start_archive(true),
                     Some(CommandAction::Jobs) => { self.queue_open = true; self.queue_selected = 0; },
+                    Some(CommandAction::Keys) => { self.key_test_open = true; self.last_test_key = None; },
                     Some(CommandAction::Jump(slot)) => self.jump_to_slot(slot),
                     Some(CommandAction::JumpSet(slot)) => self.save_jump(slot),
                     Some(CommandAction::JumpDelete(slot)) => self.delete_jump(slot),
@@ -1096,6 +1148,17 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        // Capture the raw key reported by crossterm, before normal commands,
+        // jump handlers or filename search have a chance to consume it.
+        if self.key_test_open {
+            if key.code == KeyCode::Esc {
+                self.key_test_open = false;
+                self.last_test_key = None;
+            } else {
+                self.last_test_key = Some(key);
+            }
+            return;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -1518,6 +1581,8 @@ mod tests {
             queue_open: false,
             queue_selected: 0,
             pending_edit: None,
+            key_test_open: false,
+            last_test_key: None,
         }
     }
 
