@@ -1,7 +1,7 @@
 //! Small, bounded previews: filesystem I/O happens on selection changes, never in draw().
 use std::{
     fs::{self, File},
-    io::{self, Read},
+    io::Read,
     path::Path,
 };
 
