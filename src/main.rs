@@ -2945,6 +2945,39 @@ mod tests {
     }
 
     #[test]
+    fn key_diagnostics_capture_option_and_command_without_navigating() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(1, root.join("alpha"))?;
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        for ch in "keys".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.key_test_open);
+        assert!(app.last_test_key.is_none());
+
+        let cmd = key(KeyCode::Char('1'), KeyModifiers::SUPER);
+        app.handle_key(cmd);
+        assert_eq!(app.last_test_key, Some(cmd));
+        assert_eq!(app.cwd, root); // no jump while inspecting keys
+
+        let option = key(KeyCode::Char('1'), KeyModifiers::ALT);
+        app.handle_key(option);
+        assert_eq!(app.last_test_key, Some(option));
+        assert_eq!(app.cwd, root);
+
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.key_test_open);
+        assert!(app.last_test_key.is_none());
+        app.handle_key(option);
+        assert_eq!(app.cwd, root.join("alpha"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
