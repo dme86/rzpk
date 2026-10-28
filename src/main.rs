@@ -4,9 +4,13 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+mod config;
 mod details;
+mod render;
 
-use details::{Columns, DATE_WIDTH, SIZE_WIDTH, human_size, modified_color, modified_date, permission_color, permissions};
+use config::{Config, MetadataPosition};
+use details::{Columns, permissions};
+use render::{entry_line, maximum_name_width};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -116,6 +120,8 @@ fn read_directory(path: &Path) -> io::Result<Vec<Entry>> {
 struct App {
     cwd: PathBuf,
     entries: Vec<Entry>,
+    max_name_width: usize,
+    metadata_position: MetadataPosition,
     selected: usize,
     scroll: usize,
     typed: String,
@@ -127,10 +133,14 @@ struct App {
 impl App {
     fn new() -> io::Result<Self> {
         let cwd = env::current_dir()?;
+        let metadata_position = Config::load()?.metadata_position;
         let entries = read_directory(&cwd)?;
+        let max_name_width = maximum_name_width(&entries);
         Ok(Self {
             cwd,
             entries,
+            max_name_width,
+            metadata_position,
             selected: 0,
             scroll: 0,
             typed: String::new(),
@@ -146,6 +156,7 @@ impl App {
             .and_then(|path| entries.iter().position(|entry| entry.path == path))
             .unwrap_or(0);
         self.cwd = cwd;
+        self.max_name_width = maximum_name_width(&entries);
         self.entries = entries;
         self.selected = selected;
         self.scroll = 0;
@@ -303,40 +314,20 @@ impl App {
         let now = SystemTime::now();
         for (row, entry) in self.entries.iter().skip(self.scroll).take(height).enumerate() {
             let selected = self.scroll + row == self.selected;
-            let (icon, color) = entry.icon_and_color(selected);
             let background = if selected {
                 Style::default().bg(Color::Rgb(36, 51, 69))
             } else {
                 Style::default()
             };
-            let text_color = if selected { Color::White } else { Color::Gray };
-            let mut spans = vec![Span::raw("  ")];
-            if columns.show_permissions() {
-                spans.extend(entry.permissions.chars().map(|ch| {
-                    Span::styled(ch.to_string(), Style::default().fg(permission_color(ch)))
-                }));
-                spans.push(Span::raw("  "));
-            }
-            if columns.show_size() {
-                spans.push(Span::styled(
-                    format!("{:>width$}", human_size(entry.size, entry.is_dir), width = SIZE_WIDTH),
-                    Style::default().fg(Color::Rgb(149, 161, 174)),
-                ));
-                spans.push(Span::raw("  "));
-            }
-            if columns.show_date() {
-                spans.push(Span::styled(
-                    format!("{:>width$}", modified_date(entry.modified), width = DATE_WIDTH),
-                    Style::default().fg(modified_color(entry.modified, now)),
-                ));
-                spans.push(Span::raw("  "));
-            }
-            spans.extend([
-                Span::styled(icon, Style::default().fg(color)),
-                Span::raw("  "),
-                Span::styled(entry.name.as_str(), Style::default().fg(text_color)),
-            ]);
-            let line = Line::from(spans);
+            let line = entry_line(
+                entry,
+                selected,
+                columns,
+                self.metadata_position,
+                self.max_name_width,
+                area.width,
+                now,
+            );
             frame.render_widget(
                 Paragraph::new(line).style(background),
                 Rect::new(area.x, area.y + 1 + row as u16, area.width, 1),
@@ -403,6 +394,8 @@ mod tests {
     fn app(entries: Vec<Entry>) -> App {
         App {
             cwd: PathBuf::from("/"),
+            max_name_width: 0,
+            metadata_position: MetadataPosition::Right,
             entries,
             selected: 0,
             scroll: 0,
