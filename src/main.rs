@@ -28,6 +28,32 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+fn mode_indicator(vertical: bool, preview: bool, tree: bool) -> Vec<Span<'static>> {
+    let modes = [
+        (vertical, "v", Color::Rgb(131, 165, 152)), // Gruvbox blue
+        (preview, "p", Color::Rgb(250, 189, 47)),  // Gruvbox yellow
+        (tree, "t", Color::Rgb(184, 187, 38)),      // Gruvbox green
+    ];
+    let mut spans = Vec::new();
+    let mut first = true;
+    for (enabled, name, color) in modes {
+        if !enabled {
+            continue;
+        }
+        if first {
+            spans.push(Span::styled("[", Style::default().fg(Color::Rgb(146, 131, 116))));
+            first = false;
+        } else {
+            spans.push(Span::styled(", ", Style::default().fg(Color::Rgb(146, 131, 116))));
+        }
+        spans.push(Span::styled(name, Style::default().fg(color)));
+    }
+    if !first {
+        spans.push(Span::styled("]", Style::default().fg(Color::Rgb(146, 131, 116))));
+    }
+    spans
+}
+
 const TYPE_TIMEOUT: Duration = Duration::from_millis(900);
 const FOLDER_ICON: &str = "\u{e5ff}";
 const OPEN_FOLDER_ICON: &str = "\u{e5fe}";
@@ -579,18 +605,7 @@ impl App {
                 .add_modifier(Modifier::BOLD),
         )];
 
-        if split {
-            title.push(Span::styled(
-                "[v]",
-                Style::default().fg(Color::Rgb(131, 165, 152)), // Gruvbox blue
-            ));
-        }
-        if self.preview_mode {
-            title.push(Span::styled(
-                if split { " [p]" } else { "[p]" },
-                Style::default().fg(Color::Rgb(250, 189, 47)), // Gruvbox yellow
-            ));
-        }
+        title.extend(mode_indicator(split, self.preview_mode, self.tree_mode));
         if split {
             title.push(Span::styled(
                 "  Tab: switch",
@@ -1243,6 +1258,26 @@ mod tests {
         assert!(app.running);
         fs::remove_dir_all(root)?;
         Ok(())
+    }
+
+    #[test]
+    fn modes_use_single_neutral_brackets_and_commas() {
+        let all = mode_indicator(true, true, true);
+        let label = all.iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert_eq!(label, "[v, p, t]");
+        assert_eq!(
+            mode_indicator(false, true, false)
+                .iter().map(|span| span.content.as_ref()).collect::<String>(),
+            "[p]"
+        );
+        assert!(mode_indicator(false, false, false).is_empty());
+        let brackets = Color::Rgb(146, 131, 116);
+        assert_eq!(all.first().unwrap().style.fg, Some(brackets));
+        assert_eq!(all.last().unwrap().style.fg, Some(brackets));
+        assert_eq!(all[2].style.fg, Some(brackets)); // comma
+        assert_ne!(all[1].style.fg, Some(brackets)); // v
+        assert_ne!(all[3].style.fg, Some(brackets)); // p
+        assert_ne!(all[5].style.fg, Some(brackets)); // t
     }
 
     #[test]
