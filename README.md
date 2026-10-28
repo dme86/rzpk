@@ -38,7 +38,7 @@ The modes are independent and can be combined:
 
 - `:v` toggles a vertical split with two independent directory views, indicated by **[v]** in muted Gruvbox blue.
 - `:p` toggles a preview of the highlighted item, indicated by **[p]** in Gruvbox yellow. It shows bounded UTF-8 text previews, directory contents, and symlink targets; binary files show a placeholder.
-- `:t` toggles a **lazy tree** (Gruvbox green). Each pane has its own expanded folders. Directories start collapsed, `Enter` expands/collapses the highlighted folder, and selecting `… more entries (Enter)` reveals the next page.
+- `:t` toggles a **lazy tree** (Gruvbox green). The first two levels open automatically, with a budget of 6 auto-expanded branches per pane. `Enter` expands/collapses a highlighted folder, and `… more entries (Enter)` reveals additional entries.
 - `:v` together with `:p` enables a **separate preview in each pane**, updated by that pane's cursor and navigation.
 - Modes share a single neutral-gray label, e.g. `rzpk [v, p, t]`: only the letters are colored (blue, yellow and green).
 - `:n` returns to the normal single-list view, removing all modes and keeping the left pane's directory.
@@ -49,7 +49,9 @@ Previews adapt to terminal size: beside the list in wide panes, below it in narr
 
 ## Tree behavior
 
-Tree mode never recursively loads an entire project. It initially shows up to **24 entries per directory**, sorted with folders first, and a `… more entries (Enter)` row when necessary. Each Enter on that row loads another page; expanding an actual directory reads only its immediate entries. A global **360-row** safety limit and **12-level** maximum depth prevent runaway expansions. Symbolic links to directories are not recursively followed.
+Tree mode **automatically expands the first two folder levels** when switched on, up to **6 automatically opened branches** per tree. That makes the hierarchy visible immediately without exploding into a huge recursive scan. Additional folders can be opened or closed with `Enter`.
+
+Only **24 entries per directory** are loaded initially, with folders sorted first within each page and a `… more entries (Enter)` row when necessary. Press `Enter` on that row to reveal another page. A global **360-row** safety limit and **12-level** maximum depth prevent runaway expansion. Symbolic links to directories are not recursively followed.
 
 The tree works with the existing search, up/down navigation and marks. The active pane alone responds to input; switching between panes retains each one's tree state. `Backspace` still navigates to the parent of the current root. In very narrow windows, the tree is clipped horizontally rather than triggering unbounded layout work. No directory scanning happens in the drawing loop.
 
