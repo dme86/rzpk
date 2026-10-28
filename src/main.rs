@@ -2324,6 +2324,131 @@ mod tests {
     }
 
     #[test]
+    fn parent_row_is_focusable_and_enter_goes_back() -> io::Result<()> {
+        let root = split_fixture()?;
+        let child = root.join("alpha");
+        let mut app = app(read_directory(&child)?);
+        app.cwd = child.clone();
+
+        // Even empty directories have a selectable [..] above their content.
+        assert!(app.entries.is_empty());
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 0);
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        assert!(!app.parent_focused);
+        assert_eq!(app.entries[app.selected].name, "alpha");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn left_right_keys_navigate_directories_without_search() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        let before = app.entries[app.selected].path.clone();
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.cwd, before);
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        assert_eq!(app.entries[app.selected].name, "alpha");
+        assert!(app.typed.is_empty());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn parent_row_does_not_interfere_with_marks_or_incremental_search() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(!app.parent_focused);
+        assert_eq!(app.entries[app.selected].name, "notes.txt");
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        assert!(app.pending_transfer.is_none());
+        assert!(app.error.as_deref().unwrap().contains(":v"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn enter_on_regular_file_requests_editor_in_normal_and_tree_views() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        let index = app.entries.iter().position(|entry| entry.name == "notes.txt").unwrap();
+        app.selected = index;
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.pending_edit.as_deref(), Some(root.join("notes.txt").as_path()));
+        app.pending_edit = None;
+        app.toggle_tree()?;
+        let index = app.entries.iter().position(|entry| entry.name == "notes.txt").unwrap();
+        app.selected = index;
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.pending_edit.as_deref(), Some(root.join("notes.txt").as_path()));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn split_panes_keep_independent_parent_focus_and_navigation() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(!app.parent_focused);
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("alpha"));
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        assert_eq!(app.cwd, root);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tree_mode_parent_row_and_right_arrow_work_independently() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_tree()?;
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE));
+        assert!(app.parent_focused);
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert!(!app.parent_focused);
+        assert_eq!(app.entries[app.selected].name, "alpha");
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("alpha"));
+        assert!(app.tree.is_some());
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn editor_argument_parsing_is_safe_and_handles_spaces() -> io::Result<()> {
+        let args = editor_argv("nvim -u 'some config.lua' --")?;
+        assert_eq!(args, vec!["nvim", "-u", "some config.lua", "--"]);
+        assert!(editor_argv(" ").is_err());
+        assert!(editor_argv("nvim 'unclosed").is_err());
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
