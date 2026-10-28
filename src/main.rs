@@ -1,6 +1,7 @@
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
+    process::Command,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -171,6 +172,7 @@ struct App {
     max_name_width: usize,
     metadata_position: MetadataPosition,
     selected: usize,
+    parent_focused: bool,
     selection: Selection,
     scroll: usize,
     typed: String,
@@ -194,6 +196,7 @@ struct App {
     queue: WorkQueue,
     queue_open: bool,
     queue_selected: usize,
+    pending_edit: Option<PathBuf>,
 }
 
 impl App {
@@ -208,6 +211,7 @@ impl App {
             max_name_width,
             metadata_position,
             selected: 0,
+            parent_focused: false,
             selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
@@ -231,6 +235,7 @@ impl App {
             queue: WorkQueue::default(),
             queue_open: false,
             queue_selected: 0,
+            pending_edit: None,
         })
     }
 
@@ -272,6 +277,7 @@ impl App {
         self.selected = focus
             .and_then(|path| self.entries.iter().position(|entry| entry.path == path))
             .unwrap_or(0);
+        self.parent_focused = false;
         self.selection.clear();
         self.scroll = 0;
         self.clear_typed();
@@ -288,7 +294,25 @@ impl App {
         Ok(())
     }
 
+    /// Right arrow always enters the chosen directory, including in tree
+    /// mode. Enter keeps the distinct tree expand/collapse behavior.
+    fn enter_directory(&mut self) -> io::Result<()> {
+        if self.parent_focused {
+            return self.parent();
+        }
+        if let Some(entry) = self.entries.get(self.selected)
+            && entry.is_dir
+            && self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected))
+        {
+            return self.change_directory(entry.path.clone(), None);
+        }
+        Ok(())
+    }
+
     fn open_selected(&mut self) -> io::Result<()> {
+        if self.parent_focused {
+            return self.parent();
+        }
         if let Some(tree) = self.tree.as_mut() {
             let index = self.selected;
             let path = self.entries.get(index).map(|entry| entry.path.clone());
@@ -308,16 +332,20 @@ impl App {
                     {
                         let entries = tree.toggle_directory(&self.cwd, &path)?;
                         self.replace_visible(entries, Some(&path), index);
+                        return Ok(());
                     }
-                    return Ok(());
+                    // Files inside expanded tree branches are editable too.
                 }
                 _ => return Ok(()),
             }
         }
-        if let Some(entry) = self.entries.get(self.selected)
-            && entry.is_dir
-        {
-            self.change_directory(entry.path.clone(), None)?;
+        if let Some(entry) = self.entries.get(self.selected) {
+            if entry.is_dir {
+                self.change_directory(entry.path.clone(), None)?;
+            } else if entry.path.is_file() {
+                self.pending_edit = Some(entry.path.clone());
+                self.clear_typed();
+            }
         }
         Ok(())
     }
@@ -360,6 +388,7 @@ impl App {
         if let Some(index) = self.find_match(&prefix) {
             self.selection.commit();
             self.selected = index;
+            self.parent_focused = false;
             self.refresh_active_preview();
             self.typed = prefix;
         } else {
@@ -368,6 +397,7 @@ impl App {
             if let Some(index) = self.find_match(&single) {
                 self.selection.commit();
                 self.selected = index;
+                self.parent_focused = false;
                 self.refresh_active_preview();
                 self.typed = single;
             } else {
@@ -378,7 +408,28 @@ impl App {
     }
 
     fn move_cursor(&mut self, direction: i8, extend: bool) {
+        if self.parent_focused {
+            if direction > 0 && !self.entries.is_empty() {
+                self.parent_focused = false;
+                self.selected = 0;
+                self.refresh_active_preview();
+            }
+            self.clear_typed();
+            return;
+        }
         if self.entries.is_empty() {
+            if direction < 0 && self.cwd.parent().is_some() {
+                self.parent_focused = true;
+                self.refresh_active_preview();
+            }
+            self.clear_typed();
+            return;
+        }
+        if direction < 0 && self.selected == 0 && self.cwd.parent().is_some() {
+            self.selection.commit();
+            self.parent_focused = true;
+            self.refresh_active_preview();
+            self.clear_typed();
             return;
         }
         let next = if direction < 0 {
@@ -401,7 +452,8 @@ impl App {
     }
 
     fn toggle_current(&mut self) {
-        if !self.entries.is_empty()
+        if !self.parent_focused
+            && !self.entries.is_empty()
             && self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected))
         {
             self.selection.toggle(self.selected);
@@ -419,6 +471,7 @@ impl App {
         std::mem::swap(&mut self.entries, &mut other.entries);
         std::mem::swap(&mut self.max_name_width, &mut other.max_name_width);
         std::mem::swap(&mut self.selected, &mut other.selected);
+        std::mem::swap(&mut self.parent_focused, &mut other.parent_focused);
         std::mem::swap(&mut self.selection, &mut other.selection);
         std::mem::swap(&mut self.scroll, &mut other.scroll);
         std::mem::swap(&mut self.typed, &mut other.typed);
@@ -452,7 +505,7 @@ impl App {
 
     fn refresh_active_preview(&mut self) {
         if self.preview_mode {
-            self.preview = if self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
+            self.preview = if !self.parent_focused && self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
                 Preview::selected(&self.entries, self.selected)
             } else {
                 None
@@ -533,7 +586,7 @@ impl App {
         let marked = self.selection.count() > 0;
         let sources = self.entries.iter().enumerate()
             .filter(|(index, _)| {
-                if marked { self.selection.contains(*index) } else { *index == self.selected }
+                if marked { self.selection.contains(*index) } else { !self.parent_focused && *index == self.selected }
             })
             .filter(|(index, _)| self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
             .map(|(_, entry)| entry.path.clone())
@@ -722,7 +775,7 @@ impl App {
         }
         let marked = self.selection.count() > 0;
         let sources = self.entries.iter().enumerate()
-            .filter(|(index, _)| if marked { self.selection.contains(*index) } else { *index == self.selected })
+            .filter(|(index, _)| if marked { self.selection.contains(*index) } else { !self.parent_focused && *index == self.selected })
             .filter(|(index, _)| self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
             .map(|(_, entry)| entry.path.clone())
             .collect::<Vec<_>>();
@@ -957,6 +1010,9 @@ impl App {
             Some(Action::Parent) => {
                 if let Err(error) = self.parent() { self.error = Some(error.to_string()); }
             }
+            Some(Action::EnterDirectory) => {
+                if let Err(error) = self.enter_directory() { self.error = Some(error.to_string()); }
+            }
             Some(Action::Open) => {
                 if let Err(error) = self.open_selected() { self.error = Some(error.to_string()); }
             }
@@ -1162,6 +1218,7 @@ impl App {
             entries: &self.entries,
             max_name_width: self.max_name_width,
             selected: self.selected,
+            parent_focused: self.parent_focused,
             selection: &self.selection,
             scroll: &mut self.scroll,
             typed: &self.typed,
@@ -1284,6 +1341,7 @@ mod tests {
             metadata_position: MetadataPosition::Right,
             entries,
             selected: 0,
+            parent_focused: false,
             selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
@@ -1307,6 +1365,7 @@ mod tests {
             queue: WorkQueue::default(),
             queue_open: false,
             queue_selected: 0,
+            pending_edit: None,
         }
     }
 
