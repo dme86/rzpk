@@ -574,6 +574,7 @@ impl App {
                 Ok(()) => {
                     self.status = Some(format!("Queued operation ({} waiting)", self.queue.len()));
                     self.error = None;
+                    self.selection.clear();
                     self.clear_typed();
                     self.start_next_job();
                 }
@@ -585,6 +586,7 @@ impl App {
                     self.job = Some(job);
                     self.status = None;
                     self.error = None;
+                    self.selection.clear();
                     self.clear_typed();
                 }
                 Err(error) => self.error = Some(format!("Cannot start file operation: {error}")),
@@ -1038,18 +1040,46 @@ impl App {
         }
         Line::from(vec![
             Span::styled("  ? help", Style::default().fg(Color::Rgb(250, 189, 47))),
-            Span::styled("   : commands   ·   Shift+C copy   Shift+M move   Shift+A pack   Shift+E extract", subdued),
+            Span::styled("   : commands   ·   Shift+C copy   Shift+M move   Shift+A pack   Shift+E extract   ·   :jobs", subdued),
         ])
+    }
+
+    fn queue_footer_line(&self, width: u16) -> Line<'static> {
+        let muted = Style::default().fg(Color::Rgb(146, 131, 116));
+        let accent = Style::default().fg(Color::Rgb(250, 189, 47));
+        let mut spans = vec![
+            Span::styled(format!("  ◷ {} waiting", self.queue.len()), accent),
+        ];
+        if width >= 64 {
+            let max_items = if width >= 116 { 3 } else { 1 };
+            for (i, work) in self.queue.iter().take(max_items).enumerate() {
+                let description = work.description();
+                let summary = description.chars().take(if width >= 116 { 28 } else { 34 }).collect::<String>();
+                spans.push(Span::styled(format!("   {}. {summary}", i + 1), muted));
+            }
+            if self.queue.len() > max_items {
+                spans.push(Span::styled(format!("  +{}", self.queue.len() - max_items), muted));
+            }
+        }
+        spans.push(Span::styled("   ·   :jobs", accent));
+        Line::from(spans)
     }
 
     fn draw_footer(&self, frame: &mut Frame, area: Rect) {
         if area.height == 0 || area.width == 0 {
             return;
         }
+        let background = Style::default().bg(Color::Rgb(40, 40, 40));
         frame.render_widget(
-            Paragraph::new(self.footer_line()).style(Style::default().bg(Color::Rgb(40, 40, 40))),
-            area,
+            Paragraph::new(self.footer_line()).style(background),
+            Rect::new(area.x, area.y, area.width, 1),
         );
+        if area.height >= 2 {
+            frame.render_widget(
+                Paragraph::new(self.queue_footer_line(area.width)).style(background),
+                Rect::new(area.x, area.y + 1, area.width, 1),
+            );
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -1058,13 +1088,14 @@ impl App {
         if screen.height == 0 || screen.width == 0 {
             return;
         }
+        let footer_height = if !self.queue.is_empty() && screen.height >= 5 { 2 } else { 1 };
         self.draw_footer(frame, Rect::new(
             screen.x,
-            screen.y + screen.height - 1,
+            screen.y + screen.height - footer_height,
             screen.width,
-            1,
+            footer_height,
         ));
-        let area = Rect::new(screen.x, screen.y, screen.width, screen.height - 1);
+        let area = Rect::new(screen.x, screen.y, screen.width, screen.height - footer_height);
         if area.height == 0 {
             return;
         }
