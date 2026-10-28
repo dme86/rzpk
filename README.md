@@ -64,7 +64,11 @@ In split view (`:v`), the **active pane is the source** and the other pane's **c
 
 A confirmation dialog shows the source and destination. Press **Enter** to execute or **Esc** to cancel without losing marks. Existing targets never get silently overwritten: the operation is rejected before confirmation. Subdirectories and symlinks are copied without following symlinks, and selecting both a parent folder and a child transfers the parent only once.
 
-The ordinary lowercase `c` and `m` still start or refine the incremental search. In tree mode, the destination is the *other pane's current root directory*, not a highlighted subtree. Transfers are synchronous; large transfers may temporarily pause the UI. A failed multi-item operation can leave earlier completed items in place and reports an error.
+The ordinary lowercase `c` and `m` still start or refine the incremental search. In tree mode, the destination is the *other pane's current root directory*, not a highlighted subtree. Copy and move operations run in a background worker. A permanent footer shows a live spinner, a progress bar for completed source items and transferred data. The file browser stays usable while an operation is in progress. Only one filesystem job can run at a time; quitting is deferred until it finishes. A failed multi-item operation can leave earlier completed items in place and reports an error.
+
+## Footer and progress
+
+rzpk reserves a single terminal row at the bottom for contextual help, success/error feedback, and background file jobs. During copy, move, archive creation, or extraction it displays an animated activity indicator, elapsed time, processed data and a progress bar when a meaningful total is available. The footer remains visible with `:v`, `:p`, and `:t` enabled, without covering directory entries. Navigation, selection and search still work during a job, but a second transfer or archive operation is rejected until the first completes.
 
 ## Built-in help
 
@@ -77,7 +81,7 @@ Press **`?`** anywhere during normal navigation to open the scrollable help wind
 - `:archive` and `:extract` work too, without needing function keys.
 - Supported extraction: `.zip`, `.tar`, `.tar.gz` / `.tgz`, `.tar.xz`, `.tar.bz2` (format detected by file signature wherever possible). Other types such as `.7z` are not yet supported.
 
-Both actions require confirmation with **Enter**; **Esc** cancels. Existing target files/folders are never overwritten. Extraction rejects unsafe paths, symlinks, special filesystem entries, or archives exceeding 20,000 entries / 2 GiB uncompressed. Failures remove the newly created extraction folder. Archive operations currently run synchronously, so very large archives may temporarily freeze the UI.
+Both actions require confirmation with **Enter**; **Esc** cancels. Existing target files/folders are never overwritten. Extraction rejects unsafe paths, symlinks, special filesystem entries, or archives exceeding 20,000 entries / 2 GiB uncompressed. Failures remove the newly created extraction folder. Archive operations run in the same background worker as transfers. The footer shows an animated spinner, processed data and an item progress bar when the count is known (packing selected items or extracting ZIP entries). For streaming TAR extraction, the total member count is unknown until completion, so rzpk deliberately shows activity and processed bytes instead of an invented percentage. The worker cannot be canceled after confirmation; finish the operation before quitting rzpk.
 
 ## Keys
 
