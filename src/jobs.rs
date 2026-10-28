@@ -1,0 +1,211 @@
+//! One filesystem job at a time, off the UI thread.
+//!
+//! Progress is read from atomics by the event loop, avoiding a flood of
+//! messages for each copied chunk. The channel delivers the final result.
+use std::{
+    io::{self, Read, Write},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, TryRecvError},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use crate::{archive::ArchiveJob, fileops::{Transfer, TransferKind}};
+
+#[derive(Debug)]
+pub struct Progress {
+    bytes: AtomicU64,
+    items: AtomicU64,
+    total: AtomicU64,
+}
+
+impl Progress {
+    fn new() -> Self {
+        Self {
+            bytes: AtomicU64::new(0),
+            items: AtomicU64::new(0),
+            total: AtomicU64::new(0),
+        }
+    }
+
+    pub fn set_total(&self, total: usize) {
+        self.total.store(total as u64, Ordering::Relaxed);
+    }
+
+    pub fn item_done(&self) {
+        self.items.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn bytes_done(&self, count: u64) {
+        self.bytes.fetch_add(count, Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            bytes: self.bytes.load(Ordering::Relaxed),
+            items: self.items.load(Ordering::Relaxed),
+            total: self.total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Snapshot {
+    pub bytes: u64,
+    pub items: u64,
+    pub total: u64,
+}
+
+impl Snapshot {
+    pub fn percent(self) -> Option<u64> {
+        (self.total > 0).then(|| self.items.min(self.total).saturating_mul(100) / self.total)
+    }
+}
+
+/// Count bytes as they are actually read, not while estimating the job.
+pub struct TrackedReader<R> {
+    inner: R,
+    progress: Arc<Progress>,
+}
+
+impl<R> TrackedReader<R> {
+    pub fn new(inner: R, progress: &Arc<Progress>) -> Self {
+        Self { inner, progress: Arc::clone(progress) }
+    }
+}
+
+impl<R: Read> Read for TrackedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let count = self.inner.read(buf)?;
+        self.progress.bytes_done(count as u64);
+        Ok(count)
+    }
+}
+
+/// Count bytes written by compressors or file copies during a job.
+pub struct TrackedWriter<W> {
+    inner: W,
+    progress: Arc<Progress>,
+}
+
+impl<W> TrackedWriter<W> {
+    pub fn new(inner: W, progress: &Arc<Progress>) -> Self {
+        Self { inner, progress: Arc::clone(progress) }
+    }
+}
+
+impl<W: Write> Write for TrackedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let count = self.inner.write(bytes)?;
+        self.progress.bytes_done(count as u64);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+pub enum Work {
+    Transfer(Transfer),
+    Archive(ArchiveJob),
+}
+
+impl Work {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Transfer(transfer) => match transfer.kind {
+                TransferKind::Copy => "Copying",
+                TransferKind::Move => "Moving",
+            },
+            Self::Archive(ArchiveJob::Pack { .. }) => "Packing",
+            Self::Archive(ArchiveJob::Unpack { .. }) => "Extracting",
+        }
+    }
+}
+
+pub enum Poll {
+    Busy,
+    Finished(io::Result<String>),
+}
+
+pub struct RunningJob {
+    pub label: &'static str,
+    pub progress: Arc<Progress>,
+    pub started: Instant,
+    receiver: Receiver<io::Result<String>>,
+}
+
+impl RunningJob {
+    pub fn start(work: Work) -> io::Result<Self> {
+        let progress = Arc::new(Progress::new());
+        let worker_progress = Arc::clone(&progress);
+        let label = work.label();
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("rzpk-file-worker".to_owned())
+            .spawn(move || {
+                let result = match work {
+                    Work::Transfer(transfer) => {
+                        let kind = transfer.kind;
+                        transfer.execute_with_progress(&worker_progress)
+                            .map(|count| format!("{} {count} item(s)", kind.past_tense()))
+                    }
+                    Work::Archive(job) => job.execute_with_progress(&worker_progress),
+                };
+                let _ = tx.send(result);
+            })?;
+        Ok(Self {
+            label,
+            progress,
+            started: Instant::now(),
+            receiver: rx,
+        })
+    }
+
+    pub fn poll(&self) -> Poll {
+        match self.receiver.try_recv() {
+            Ok(result) => Poll::Finished(result),
+            Err(TryRecvError::Empty) => Poll::Busy,
+            Err(TryRecvError::Disconnected) => Poll::Finished(Err(io::Error::other("File worker stopped unexpectedly"))),
+        }
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_snapshots_are_monotonic() {
+        let progress = Arc::new(Progress::new());
+        progress.set_total(5);
+        progress.item_done();
+        progress.bytes_done(4096);
+        let snapshot = progress.snapshot();
+        assert_eq!(snapshot.percent(), Some(20));
+        assert_eq!(snapshot.bytes, 4096);
+    }
+
+    #[test]
+    fn tracked_io_reports_bytes() -> io::Result<()> {
+        let progress = Arc::new(Progress::new());
+        let mut output = Vec::new();
+        let input = io::Cursor::new(b"hello world".to_vec());
+        let mut input = TrackedReader::new(input, &progress);
+        io::copy(&mut input, &mut output)?;
+        assert_eq!(output, b"hello world");
+        assert_eq!(progress.snapshot().bytes, 11);
+        let mut target = TrackedWriter::new(Vec::new(), &progress);
+        target.write_all(b"world")?;
+        assert_eq!(progress.snapshot().bytes, 16);
+        Ok(())
+    }
+}
