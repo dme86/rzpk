@@ -415,6 +415,18 @@ impl App {
         };
         prefix.push(ch);
 
+        // Two consecutive dots select the virtual parent row instead of
+        // searching filenames. Keep the first dot as an incremental prefix
+        // even when there are no dotfiles in the current directory.
+        if prefix == ".." && self.cwd.parent().is_some() {
+            self.selection.commit();
+            self.parent_focused = true;
+            self.typed = prefix;
+            self.last_typed = Some(now);
+            self.refresh_active_preview();
+            return;
+        }
+
         if let Some(index) = self.find_match(&prefix) {
             self.selection.commit();
             self.selected = index;
@@ -430,6 +442,10 @@ impl App {
                 self.parent_focused = false;
                 self.refresh_active_preview();
                 self.typed = single;
+            } else if ch == '.' {
+                // Allow a second '.' to form ".." even if no file matched
+                // the first keypress.
+                self.typed = ".".to_owned();
             } else {
                 self.typed.clear();
             }
