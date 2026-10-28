@@ -1,9 +1,12 @@
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
+mod details;
+
+use details::{Columns, DATE_WIDTH, SIZE_WIDTH, human_size, modified_color, modified_date, permission_color, permissions};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -32,6 +35,9 @@ struct Entry {
     name_key: String,
     is_dir: bool,
     is_symlink: bool,
+    permissions: String,
+    size: Option<u64>,
+    modified: Option<SystemTime>,
 }
 
 impl Entry {
@@ -83,11 +89,16 @@ fn read_directory(path: &Path) -> io::Result<Vec<Entry>> {
         let file_type = item.file_type()?;
         let path = item.path();
         let name = item.file_name().to_string_lossy().into_owned();
+        // Use symlink metadata, not the target's permissions/size.
+        let metadata = fs::symlink_metadata(&path).ok();
         entries.push(Entry {
             name_key: name.to_lowercase(),
             name,
             is_dir: file_type.is_dir() || (file_type.is_symlink() && path.is_dir()),
             is_symlink: file_type.is_symlink(),
+            permissions: permissions(metadata.as_ref()),
+            size: metadata.as_ref().map(fs::Metadata::len),
+            modified: metadata.as_ref().and_then(|metadata| metadata.modified().ok()),
             path,
         });
     }
@@ -288,6 +299,8 @@ impl App {
             self.scroll = self.selected + 1 - height;
         }
 
+        let columns = Columns::for_width(area.width);
+        let now = SystemTime::now();
         for (row, entry) in self.entries.iter().skip(self.scroll).take(height).enumerate() {
             let selected = self.scroll + row == self.selected;
             let (icon, color) = entry.icon_and_color(selected);
@@ -297,12 +310,33 @@ impl App {
                 Style::default()
             };
             let text_color = if selected { Color::White } else { Color::Gray };
-            let line = Line::from(vec![
-                Span::raw("  "),
+            let mut spans = vec![Span::raw("  ")];
+            if columns.show_permissions() {
+                spans.extend(entry.permissions.chars().map(|ch| {
+                    Span::styled(ch.to_string(), Style::default().fg(permission_color(ch)))
+                }));
+                spans.push(Span::raw("  "));
+            }
+            if columns.show_size() {
+                spans.push(Span::styled(
+                    format!("{:>width$}", human_size(entry.size, entry.is_dir), width = SIZE_WIDTH),
+                    Style::default().fg(Color::Rgb(149, 161, 174)),
+                ));
+                spans.push(Span::raw("  "));
+            }
+            if columns.show_date() {
+                spans.push(Span::styled(
+                    format!("{:>width$}", modified_date(entry.modified), width = DATE_WIDTH),
+                    Style::default().fg(modified_color(entry.modified, now)),
+                ));
+                spans.push(Span::raw("  "));
+            }
+            spans.extend([
                 Span::styled(icon, Style::default().fg(color)),
                 Span::raw("  "),
                 Span::styled(entry.name.as_str(), Style::default().fg(text_color)),
             ]);
+            let line = Line::from(spans);
             frame.render_widget(
                 Paragraph::new(line).style(background),
                 Rect::new(area.x, area.y + 1 + row as u16, area.width, 1),
@@ -360,6 +394,9 @@ mod tests {
             name_key: name.to_lowercase(),
             is_dir,
             is_symlink: false,
+            permissions: if is_dir { "drwxr-xr-x" } else { "-rw-r--r--" }.to_string(),
+            size: Some(123),
+            modified: Some(SystemTime::now()),
         }
     }
 
