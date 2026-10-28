@@ -17,6 +17,7 @@ use crate::{
     Entry, read_directory,
     preview::{Preview, draw_preview},
     config::MetadataPosition,
+    jumps::Jumps,
     details::Columns,
     render::{EntryHighlight, entry_line, maximum_name_width},
     selection::Selection,
@@ -64,9 +65,10 @@ impl PaneState {
         })
     }
 
-    pub fn view(&mut self) -> PaneView<'_> {
+    pub fn view<'a>(&'a mut self, jumps: &'a Jumps) -> PaneView<'a> {
         PaneView {
             cwd: &self.cwd,
+            jumps,
             entries: &self.entries,
             max_name_width: self.max_name_width,
             selected: self.selected,
@@ -144,6 +146,7 @@ impl PaneState {
 
 pub struct PaneView<'a> {
     pub cwd: &'a Path,
+    pub jumps: &'a Jumps,
     pub entries: &'a [Entry],
     pub max_name_width: usize,
     pub selected: usize,
@@ -341,6 +344,28 @@ pub fn preview_layout(area: Rect, enabled: bool) -> (Rect, Option<Rect>) {
     (area, None)
 }
 
+pub fn draw_jump_strip(frame: &mut Frame, area: Rect, view: &PaneView<'_>) {
+    if area.height == 0 || area.width == 0 { return; }
+    let hints = view.jumps.hints(area.width, view.cwd);
+    if hints.is_empty() { return; }
+    let muted = Style::default().fg(Color::Rgb(146, 131, 116));
+    let mut spans = vec![Span::styled(" ↗ ", Style::default().fg(Color::Rgb(131, 165, 152)))];
+    for (index, hint) in hints.iter().enumerate() {
+        if index > 0 { spans.push(Span::styled("  ", muted)); }
+        let color = if hint.active { Color::Rgb(184, 187, 38) } else { Color::Rgb(250, 189, 47) };
+        spans.push(Span::styled(format!("{}", hint.slot), Style::default().fg(color)));
+        spans.push(Span::styled(format!(" {}", hint.label), muted));
+    }
+    let missing = view.jumps.len().saturating_sub(hints.len());
+    if missing > 0 {
+        spans.push(Span::styled(format!("  +{missing}"), muted));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Rgb(40, 40, 40))),
+        area,
+    );
+}
+
 pub fn draw_pane_content(
     frame: &mut Frame,
     area: Rect,
@@ -350,7 +375,13 @@ pub fn draw_pane_content(
     preview_enabled: bool,
 ) {
     let (listing, preview_area) = preview_layout(area, preview_enabled);
-    draw_entries(frame, listing, view, metadata_position, active);
+    let mut list = listing;
+    if !view.jumps.is_empty() && listing.height >= 2 {
+        draw_jump_strip(frame, Rect::new(listing.x, listing.y, listing.width, 1), view);
+        list.y = list.y.saturating_add(1);
+        list.height = list.height.saturating_sub(1);
+    }
+    draw_entries(frame, list, view, metadata_position, active);
     if let Some(preview_area) = preview_area {
         draw_preview(frame, preview_area, view.preview);
     }
