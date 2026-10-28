@@ -376,7 +376,7 @@ pub fn draw_pane_content(
 ) {
     let (listing, preview_area) = preview_layout(area, preview_enabled);
     let mut list = listing;
-    if !view.jumps.is_empty() && listing.height >= 2 {
+    if listing.height >= 2 && !view.jumps.hints(listing.width, view.cwd).is_empty() {
         draw_jump_strip(frame, Rect::new(listing.x, listing.y, listing.width, 1), view);
         list.y = list.y.saturating_add(1);
         list.height = list.height.saturating_sub(1);
