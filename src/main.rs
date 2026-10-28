@@ -11,6 +11,7 @@ mod config;
 mod details;
 mod fileops;
 mod jobs;
+mod jumps;
 mod pane;
 mod preview;
 mod queue;
@@ -24,6 +25,7 @@ use config::{Config, MetadataPosition};
 use details::permissions;
 use fileops::{Transfer, TransferKind};
 use jobs::{Poll as JobPoll, RunningJob, Work};
+use jumps::Jumps;
 use render::maximum_name_width;
 use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_columns};
 use preview::Preview;
@@ -201,6 +203,7 @@ struct App {
     entries: Vec<Entry>,
     max_name_width: usize,
     metadata_position: MetadataPosition,
+    jumps: Jumps,
     selected: usize,
     parent_focused: bool,
     selection: Selection,
@@ -232,7 +235,9 @@ struct App {
 impl App {
     fn new() -> io::Result<Self> {
         let cwd = env::current_dir()?;
-        let metadata_position = Config::load()?.metadata_position;
+        let config = Config::load()?;
+        let metadata_position = config.metadata_position;
+        let jumps = Jumps::from_config(&config.jumps)?;
         let entries = read_directory(&cwd)?;
         let max_name_width = maximum_name_width(&entries);
         Ok(Self {
@@ -240,6 +245,7 @@ impl App {
             entries,
             max_name_width,
             metadata_position,
+            jumps,
             selected: 0,
             parent_focused: false,
             selection: Selection::default(),
@@ -952,6 +958,61 @@ impl App {
         }
     }
 
+    fn jump_to_slot(&mut self, slot: u8) {
+        let Some(destination) = self.jumps.get(slot).map(Path::to_path_buf) else {
+            self.error = Some(format!("Jump {slot} is not set (:jset {slot})"));
+            return;
+        };
+        // Fail without changing the pane if the jump was removed, became
+        // unreadable or points to a file.
+        match fs::canonicalize(&destination)
+            .and_then(|path| {
+                if !path.is_dir() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "Jump target is not a directory"));
+                }
+                self.change_directory(path, None)
+            })
+        {
+            Ok(()) => self.status = Some(format!("Jump {slot}")),
+            Err(error) => self.error = Some(format!("Jump {slot}: {error}")),
+        }
+    }
+
+    fn save_jump(&mut self, slot: u8) {
+        match fs::canonicalize(&self.cwd).and_then(|directory| {
+            if !directory.is_dir() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Current path is not a directory"));
+            }
+            Config::update_jump(slot, Some(&directory))?;
+            Ok(directory)
+        }) {
+            Ok(directory) => {
+                if let Err(error) = self.jumps.set(slot, directory) {
+                    self.error = Some(error.to_string());
+                    return;
+                }
+                self.error = None;
+                self.status = Some(format!("Saved current directory as jump {slot}"));
+            }
+            Err(error) => self.error = Some(format!("Cannot save jump {slot}: {error}")),
+        }
+    }
+
+    fn delete_jump(&mut self, slot: u8) {
+        if self.jumps.get(slot).is_none() {
+            self.error = Some(format!("Jump {slot} is not set"));
+            return;
+        }
+        match Config::update_jump(slot, None) {
+            Ok(()) => {
+                self.jumps.remove(slot);
+                self.error = None;
+                self.status = Some(format!("Removed jump {slot}"));
+            }
+            Err(error) => self.error = Some(format!("Cannot remove jump {slot}: {error}")),
+        }
+    }
+
     fn handle_command_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -984,6 +1045,9 @@ impl App {
                     Some(CommandAction::Archive) => self.start_archive(false),
                     Some(CommandAction::Extract) => self.start_archive(true),
                     Some(CommandAction::Jobs) => { self.queue_open = true; self.queue_selected = 0; },
+                    Some(CommandAction::Jump(slot)) => self.jump_to_slot(slot),
+                    Some(CommandAction::JumpSet(slot)) => self.save_jump(slot),
+                    Some(CommandAction::JumpDelete(slot)) => self.delete_jump(slot),
                     None => self.error = Some(format!("unknown command: :{command}")),
                 }
             }
@@ -1073,6 +1137,7 @@ impl App {
             Some(Action::Archive) => self.start_archive(false),
             Some(Action::Extract) => self.start_archive(true),
             Some(Action::Jobs) => { self.queue_open = true; self.queue_selected = 0; self.clear_typed(); },
+            Some(Action::Jump(slot)) => self.jump_to_slot(slot),
             Some(Action::Quit) => {
                 if self.job.is_none() && self.queue.is_empty() { self.running = false; }
             },
@@ -1261,6 +1326,7 @@ impl App {
 
         let mut current = PaneView {
             cwd: &self.cwd,
+            jumps: &self.jumps,
             entries: &self.entries,
             max_name_width: self.max_name_width,
             selected: self.selected,
@@ -1278,7 +1344,7 @@ impl App {
             self.draw_overlays(frame, area);
             return;
         };
-        let mut inactive = other.view();
+        let mut inactive = other.view(&self.jumps);
 
         if !use_two_columns(area.width) {
             draw_split_pane(frame, content, &mut current, self.metadata_position, true, self.preview_mode);
@@ -1395,6 +1461,7 @@ mod tests {
             cwd: PathBuf::from("/"),
             max_name_width: 0,
             metadata_position: MetadataPosition::Right,
+            jumps: Jumps::default(),
             entries,
             selected: 0,
             parent_focused: false,
