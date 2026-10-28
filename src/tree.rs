@@ -44,6 +44,7 @@ pub struct TreeState {
     pub rows: Vec<TreeRow>,
     expanded: HashSet<PathBuf>,
     collapsed: HashSet<PathBuf>,
+    auto_opened: HashSet<PathBuf>,
     pages: HashMap<PathBuf, usize>,
 }
 
@@ -58,6 +59,7 @@ impl TreeState {
     /// Rendering never scans the filesystem.
     pub fn rebuild(&mut self, root: &Path) -> io::Result<Vec<Entry>> {
         self.rows.clear();
+        self.auto_opened.clear();
         let mut entries = Vec::new();
         let mut auto_budget = MAX_AUTO_EXPAND;
         self.append(root, "", 0, &mut entries, &mut auto_budget)?;
@@ -105,6 +107,7 @@ impl TreeState {
                 && *auto_budget > 0;
             if auto_expand && entry.is_dir && !entry.is_symlink {
                 *auto_budget -= 1;
+                self.auto_opened.insert(path.clone());
             }
             let expanded = entry.is_dir
                 && !entry.is_symlink
@@ -160,18 +163,12 @@ impl TreeState {
     }
 
     pub fn toggle_directory(&mut self, root: &Path, path: &Path) -> io::Result<Vec<Entry>> {
-        let is_open = self.rows.iter().any(|row| {
-            // Existing entry positions are kept by the caller; use the path
-            // lookup against the rows in the current tree instead of assuming
-            // manually-opened state for automatically expanded branches.
-            matches!(row.kind, RowKind::Entry { expanded: true })
-        });
-        let _ = is_open;
-        if self.expanded.remove(path) {
+        // Auto-opened directories are open too, even though they were never
+        // added to the explicit expansion set.
+        if self.expanded.remove(path) || self.auto_opened.contains(path) {
             self.collapsed.insert(path.to_path_buf());
-        } else if self.collapsed.remove(path) {
-            // A previously closed default branch goes back to auto expansion.
         } else {
+            self.collapsed.remove(path);
             self.expanded.insert(path.to_path_buf());
         }
         self.rebuild(root)
