@@ -100,6 +100,7 @@ fn mode_indicator(vertical: bool, preview: bool, tree: bool) -> Vec<Span<'static
 }
 
 const TYPE_TIMEOUT: Duration = Duration::from_millis(900);
+const JUMP_PREFIX_TIMEOUT: Duration = Duration::from_secs(4);
 const FOLDER_ICON: &str = "\u{e5ff}";
 const OPEN_FOLDER_ICON: &str = "\u{e5fe}";
 const FILE_ICON: &str = "\u{f016}";
@@ -235,6 +236,7 @@ struct App {
     pending_edit: Option<PathBuf>,
     key_test_open: bool,
     last_test_key: Option<KeyEvent>,
+    jump_prefix_since: Option<Instant>,
 }
 
 impl App {
@@ -280,6 +282,7 @@ impl App {
             pending_edit: None,
             key_test_open: false,
             last_test_key: None,
+            jump_prefix_since: None,
         })
     }
 
@@ -1172,6 +1175,29 @@ impl App {
             return;
         }
 
+        if let Some(started) = self.jump_prefix_since.take()
+            && started.elapsed() < JUMP_PREFIX_TIMEOUT
+        {
+            match key.code {
+                KeyCode::Esc => return,
+                KeyCode::Char(digit @ '1'..='9')
+                    if key.modifiers.is_empty() =>
+                {
+                    self.jump_to_slot(digit as u8 - b'0');
+                    return;
+                }
+                // A second Ctrl+G restarts the waiting window.
+                KeyCode::Char('g') if ctrl && !alt && !shift => {
+                    self.jump_prefix_since = Some(Instant::now());
+                    return;
+                }
+                _ => {
+                    self.error = Some("Jump: press a digit 1–9 (Ctrl+G to retry)".into());
+                    return;
+                }
+            }
+        }
+
         if self.help_open {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') => self.help_open = false,
@@ -1229,6 +1255,11 @@ impl App {
             Some(Action::Extract) => self.start_archive(true),
             Some(Action::Jobs) => { self.queue_open = true; self.queue_selected = 0; self.clear_typed(); },
             Some(Action::Jump(slot)) => self.jump_to_slot(slot),
+            Some(Action::JumpPrefix) => {
+                self.jump_prefix_since = Some(Instant::now());
+                self.clear_typed();
+                self.error = None;
+            },
             Some(Action::Quit) => {
                 if self.job.is_none() && self.queue.is_empty() { self.running = false; }
             },
@@ -1245,6 +1276,13 @@ impl App {
     fn footer_line(&self) -> Line<'static> {
         let subdued = Style::default().fg(Color::Rgb(146, 131, 116));
         let bright = Style::default().fg(Color::Rgb(235, 219, 178));
+        if self.jump_prefix_since.is_some() {
+            return Line::from(vec![
+                Span::styled("  ↗ Jump  ", Style::default().fg(Color::Rgb(250, 189, 47))),
+                Span::styled("press 1–9", Style::default().fg(Color::Rgb(184, 187, 38))),
+                Span::styled("   ·   Esc cancel", subdued),
+            ]);
+        }
         if let Some(job) = &self.job {
             let snapshot = job.progress.snapshot();
             let frames = ["◐", "◓", "◑", "◒"];
@@ -1509,6 +1547,10 @@ impl App {
                 self.clear_typed();
                 needs_redraw = true;
             }
+            if self.jump_prefix_since.is_some_and(|started| started.elapsed() >= JUMP_PREFIX_TIMEOUT) {
+                self.jump_prefix_since = None;
+                needs_redraw = true;
+            }
             if let Some(other) = self.other.as_mut()
                 && other.expire_search(TYPE_TIMEOUT)
             {
@@ -1583,6 +1625,7 @@ mod tests {
             pending_edit: None,
             key_test_open: false,
             last_test_key: None,
+            jump_prefix_since: None,
         }
     }
 
