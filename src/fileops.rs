@@ -10,7 +10,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, ErrorKind},
     path::{Path, PathBuf},
+    sync::Arc,
 };
+
+use crate::jobs::{Progress, TrackedWriter};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransferKind {
@@ -131,10 +134,21 @@ impl Transfer {
     }
 
     pub fn execute(&self) -> io::Result<usize> {
+        self.execute_internal(None)
+    }
+
+    pub fn execute_with_progress(&self, progress: &Arc<Progress>) -> io::Result<usize> {
+        self.execute_internal(Some(progress))
+    }
+
+    fn execute_internal(&self, progress: Option<&Arc<Progress>>) -> io::Result<usize> {
         // Check again immediately before executing, as paths may have changed
         // since the user opened the confirmation dialog.
         let checked = Self::new(self.kind, self.sources.clone(), self.destination.clone())?;
         let mut completed = 0;
+        if let Some(progress) = progress {
+            progress.set_total(checked.sources.len());
+        }
         for source in &checked.sources {
             let target = target_path(source, &checked.destination)?;
             let meta = fs::symlink_metadata(source)?;
@@ -145,7 +159,7 @@ impl Transfer {
                 && meta.is_file()
                 && fs::hard_link(source, &target).is_ok();
             if !linked {
-                copy_item(source, &target)?;
+                copy_item(source, &target, progress)?;
             }
             if checked.kind == TransferKind::Move {
                 if meta.is_dir() {
@@ -155,30 +169,38 @@ impl Transfer {
                 }
             }
             completed += 1;
+            if let Some(progress) = progress {
+                progress.item_done();
+            }
         }
         Ok(completed)
     }
 }
 
-fn copy_item(source: &Path, destination: &Path) -> io::Result<()> {
+fn copy_item(source: &Path, destination: &Path, progress: Option<&Arc<Progress>>) -> io::Result<()> {
     let meta = fs::symlink_metadata(source)?;
 
     if meta.file_type().is_symlink() {
         copy_link(source, destination)
     } else if meta.is_file() {
-        copy_file(source, destination, &meta)
+        copy_file(source, destination, &meta, progress)
     } else if meta.is_dir() {
-        copy_directory(source, destination, &meta)
+        copy_directory(source, destination, &meta, progress)
     } else {
         Err(invalid(format!("Unsupported file type: {}", source.display())))
     }
 }
 
-fn copy_file(source: &Path, destination: &Path, meta: &fs::Metadata) -> io::Result<()> {
+fn copy_file(source: &Path, destination: &Path, meta: &fs::Metadata, progress: Option<&Arc<Progress>>) -> io::Result<()> {
     let mut input = File::open(source)?;
     let mut output = OpenOptions::new().write(true).create_new(true).open(destination)?;
     let result = (|| {
-        io::copy(&mut input, &mut output)?;
+        if let Some(progress) = progress {
+            let mut tracked = TrackedWriter::new(&mut output, progress);
+            io::copy(&mut input, &mut tracked)?;
+        } else {
+            io::copy(&mut input, &mut output)?;
+        }
         output.sync_all()?;
         fs::set_permissions(destination, meta.permissions())
     })();
@@ -188,12 +210,12 @@ fn copy_file(source: &Path, destination: &Path, meta: &fs::Metadata) -> io::Resu
     result
 }
 
-fn copy_directory(source: &Path, destination: &Path, meta: &fs::Metadata) -> io::Result<()> {
+fn copy_directory(source: &Path, destination: &Path, meta: &fs::Metadata, progress: Option<&Arc<Progress>>) -> io::Result<()> {
     fs::create_dir(destination)?; // Never merge into an existing directory.
     let result = (|| {
         for child in fs::read_dir(source)? {
             let child = child?;
-            copy_item(&child.path(), &destination.join(child.file_name()))?;
+            copy_item(&child.path(), &destination.join(child.file_name()), progress)?;
         }
         fs::set_permissions(destination, meta.permissions())
     })();
