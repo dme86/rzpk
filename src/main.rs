@@ -489,10 +489,8 @@ impl App {
         self.active_right = false;
         self.preview_mode = false;
         self.preview = None;
-        if self.tree_mode {
-            if let Err(error) = self.toggle_tree() {
-                self.error = Some(error.to_string());
-            }
+        if self.tree_mode && let Err(error) = self.toggle_tree() {
+            self.error = Some(error.to_string());
         }
     }
 
