@@ -73,19 +73,21 @@ impl PaneState {
     }
 
     pub fn enable_tree(&mut self) -> io::Result<()> {
-        let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
         let (tree, entries) = TreeState::open(&self.cwd)?;
-        self.tree = Some(tree);
-        self.replace_entries(entries, focus.as_deref());
+        self.enable_tree_with_entries(tree, entries);
         Ok(())
     }
 
-    pub fn disable_tree(&mut self) -> io::Result<()> {
+    pub fn enable_tree_with_entries(&mut self, tree: TreeState, entries: Vec<Entry>) {
         let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
-        let entries = read_directory(&self.cwd)?;
-        self.tree = None;
         self.replace_entries(entries, focus.as_deref());
-        Ok(())
+        self.tree = Some(tree);
+    }
+
+    pub fn disable_tree_with_entries(&mut self, entries: Vec<Entry>) {
+        let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+        self.replace_entries(entries, focus.as_deref());
+        self.tree = None;
     }
 
     fn replace_entries(&mut self, entries: Vec<Entry>, focus: Option<&Path>) {
