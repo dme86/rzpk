@@ -1,7 +1,7 @@
 //! Persistent nine-slot directory jumps and compact per-pane hints.
 //! Paths live in [jumps] in the user's regular config.toml.
 use std::{collections::BTreeMap, env, io, path::{Path, PathBuf}};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub const MAX_SLOT: u8 = 9;
 
@@ -165,7 +165,15 @@ fn compact_path(path: &Path, budget: usize) -> String {
     if UnicodeWidthStr::width(label.as_str()) <= budget {
         label
     } else {
-        label.chars().take(budget).collect()
+        let mut output = String::new();
+        let mut remaining = budget;
+        for character in label.chars() {
+            let width = UnicodeWidthChar::width(character).unwrap_or(0);
+            if width > remaining { break; }
+            remaining -= width;
+            output.push(character);
+        }
+        output
     }
 }
 
@@ -192,6 +200,15 @@ mod tests {
         assert!(jumps.get(2).unwrap().is_absolute());
         values.insert("3".to_owned(), "relative".to_owned());
         assert!(Jumps::from_config(&values).is_err());
+    }
+
+    #[test]
+    fn cjk_project_names_never_overflow_cells() {
+        let path = Path::new("/home/dev/非常に長いプロジェクトディレクトリ名");
+        for budget in 1..=18 {
+            let name = compact_path(path, budget);
+            assert!(UnicodeWidthStr::width(name.as_str()) <= budget);
+        }
     }
 
     #[test]
