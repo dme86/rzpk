@@ -133,6 +133,7 @@ impl Transfer {
         })
     }
 
+    #[cfg(test)]
     pub fn execute(&self) -> io::Result<usize> {
         self.execute_internal(None)
     }
