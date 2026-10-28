@@ -37,6 +37,7 @@ Only the cursor focus is remembered; multi-file marks remain directory-scoped an
 Save up to **nine directory jumps** (slots 1–9) to switch instantly to frequently used paths such as `~/.config`, `/etc`, or project directories. Jumps work in normal, split, tree and preview modes and always change **only the active pane**.
 
 - `:jset 1` saves the current pane's directory to slot 1 (replace `1` with any digit 1–9).
+- **Ctrl+G, then 1** jumps to slot 1 on macOS, Linux, and SSH terminals without special terminal configuration. Press the keys in sequence, not simultaneously; the footer prompts for the digit. `Esc` cancels and the prompt expires after 4 seconds.
 - **Option+1** (macOS) / **Alt+1** (Linux) jumps to slot 1 when the terminal sends Option as Alt.
 - **Cmd+1** (macOS) also works after remapping Alacritty's default Cmd+digit tab-switch shortcuts to terminal input (see below).
 - `:j1` is a terminal-independent alternative (similarly `:j2` through `:j9`).
@@ -53,9 +54,9 @@ Jumps are stored in the existing `~/.config/rzpk/config.toml` (or `$XDG_CONFIG_H
 
 When at least one slot is defined, a compact Gruvbox jump strip appears at the top of each pane, such as `↗ 1 ~/.config  2 /etc  3 …/my-project`. It abbreviates home directories, shortens long path names and shows `+N` if not all slots fit. The slot matching the current pane is highlighted. Missing or inaccessible jump targets produce an error without changing the active directory.
 
-### macOS Alacritty: make Cmd/Option+digits work
+### Optional macOS Alacritty setup for single-chord Cmd/Option+digits
 
-Alacritty **uses Cmd+1–9 to switch tabs by default**, and its default `window.option_as_alt` is `"None"`. rzpk cannot see keys intercepted by the terminal, so it needs a one-time Alacritty configuration:
+The portable **Ctrl+G, then 1–9** shortcut already works without special configuration. For the convenience of one-step Cmd/Option shortcuts, Alacritty **uses Cmd+1–9 to switch tabs by default**, and its default `window.option_as_alt` is `"None"`. rzpk cannot see keys intercepted by the terminal, so these one-step shortcuts need a one-time Alacritty configuration:
 
 1. Open `~/.config/alacritty/alacritty.toml`.
 2. Under your existing `[window]` table, set `option_as_alt = "Both"`. This makes Option+1–9 send Alt+digits. To preserve your right Option key for special characters, use `"OnlyLeft"` instead.
