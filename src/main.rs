@@ -187,11 +187,18 @@ impl App {
         self.last_typed = None;
     }
 
-    fn find_prefix(&self, prefix: &str) -> Option<usize> {
-        let prefix = prefix.to_lowercase();
+    fn find_match(&self, query: &str) -> Option<usize> {
+        let query = query.to_lowercase();
+        // Prefer filenames beginning with the query. If none match, find the
+        // query anywhere in the name (e.g. "vim" selects "neovim").
         self.entries
             .iter()
-            .position(|entry| entry.name_key.starts_with(&prefix))
+            .position(|entry| entry.name_key.starts_with(&query))
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .position(|entry| entry.name_key.contains(&query))
+            })
     }
 
     fn jump_to(&mut self, ch: char) {
@@ -206,13 +213,13 @@ impl App {
         };
         prefix.push(ch);
 
-        if let Some(index) = self.find_prefix(&prefix) {
+        if let Some(index) = self.find_match(&prefix) {
             self.selected = index;
             self.typed = prefix;
         } else {
             // If the longer prefix has no match, treat the last key as a new search.
             let single = ch.to_string();
-            if let Some(index) = self.find_prefix(&single) {
+            if let Some(index) = self.find_match(&single) {
                 self.selected = index;
                 self.typed = single;
             } else {
@@ -420,6 +427,53 @@ mod tests {
         app.jump_to('o');
         app.jump_to('w');
         assert_eq!(app.entries[app.selected].name, "Downloads");
+    }
+
+    #[test]
+    fn typing_vim_selects_neovim_by_substring() {
+        let mut app = app(vec![
+            sample("downloads", true),
+            sample("neovim", true),
+            sample("notes", true),
+        ]);
+        for ch in "vim".chars() {
+            app.jump_to(ch);
+        }
+        assert_eq!(app.entries[app.selected].name, "neovim");
+        assert_eq!(app.typed, "vim");
+    }
+
+    #[test]
+    fn prefix_match_has_priority_over_substring_match() {
+        let mut app = app(vec![
+            sample("neovim", true),
+            sample("vim", true),
+            sample("vimrc", false),
+        ]);
+        for ch in "vim".chars() {
+            app.jump_to(ch);
+        }
+        assert_eq!(app.entries[app.selected].name, "vim");
+    }
+
+    #[test]
+    fn substring_matching_is_case_insensitive() {
+        let mut app = app(vec![sample("config", true), sample("NeoVim", true)]);
+        for ch in "VIM".chars() {
+            app.jump_to(ch);
+        }
+        assert_eq!(app.entries[app.selected].name, "NeoVim");
+    }
+
+    #[test]
+    fn no_longer_match_starts_a_fresh_search() {
+        let mut app = app(vec![sample("neovim", true), sample("downloads", true)]);
+        app.jump_to('v');
+        app.jump_to('z');
+        assert_eq!(app.entries[app.selected].name, "neovim");
+        assert!(app.typed.is_empty());
+        app.jump_to('d');
+        assert_eq!(app.entries[app.selected].name, "downloads");
     }
 
     #[test]
