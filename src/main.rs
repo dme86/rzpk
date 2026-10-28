@@ -39,6 +39,36 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+/// Parse EDITOR/VISUAL as executable plus arguments, without a shell.
+fn editor_argv(value: &str) -> io::Result<Vec<String>> {
+    let args = shlex::split(value)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid EDITOR quoting"))?;
+    if args.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "EDITOR is empty"));
+    }
+    Ok(args)
+}
+
+fn launch_editor(terminal: &mut DefaultTerminal, path: &Path) -> io::Result<()> {
+    let configured = env::var("EDITOR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| env::var("VISUAL").ok().filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| "vi".to_owned());
+    let args = editor_argv(&configured)?;
+    // Release the alternate screen and raw mode before an interactive editor.
+    // Always reinitialize afterwards, even when the editor fails to spawn.
+    ratatui::restore();
+    let result = Command::new(&args[0]).args(&args[1..]).arg(path).status();
+    *terminal = ratatui::init();
+    terminal.clear()?;
+    let status = result?;
+    if !status.success() {
+        return Err(io::Error::other(format!("Editor exited with {status}")));
+    }
+    Ok(())
+}
+
 fn mode_indicator(vertical: bool, preview: bool, tree: bool) -> Vec<Span<'static>> {
     let modes = [
         (vertical, "v", Color::Rgb(131, 165, 152)), // Gruvbox blue
@@ -1282,6 +1312,16 @@ impl App {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         self.handle_key(key);
+                        if let Some(path) = self.pending_edit.take() {
+                            match launch_editor(terminal, &path) {
+                                Ok(()) => {
+                                    if let Err(error) = self.refresh_after_transfer() {
+                                        self.error = Some(format!("Cannot refresh after editing: {error}"));
+                                    }
+                                }
+                                Err(error) => self.error = Some(format!("Cannot open editor: {error}")),
+                            }
+                        }
                         needs_redraw = true;
                     }
                     Event::Resize(_, _) => needs_redraw = true,
