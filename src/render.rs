@@ -26,7 +26,7 @@ pub fn maximum_name_width(entries: &[Entry]) -> usize {
 
 fn metadata_width(columns: Columns) -> usize {
     let mut width = 0;
-    let mut fields = 0;
+    let mut fields: usize = 0;
     if columns.show_permissions() {
         width += PERMISSIONS_WIDTH;
         fields += 1;
