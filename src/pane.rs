@@ -96,7 +96,7 @@ impl PaneState {
                 && self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
             .map(|(_, entry)| entry.path.clone()).collect::<Vec<_>>();
         self.max_name_width = maximum_name_width(&entries);
-        self.selected = focus.and_then(|path| entries.iter().position(|entry| &entry.path == path)).unwrap_or(0);
+        self.selected = focus.and_then(|path| entries.iter().position(|entry| entry.path == path)).unwrap_or(0);
         self.entries = entries;
         self.selection.clear();
         for (index, entry) in self.entries.iter().enumerate() {
