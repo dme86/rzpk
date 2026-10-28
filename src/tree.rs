@@ -220,18 +220,77 @@ mod tests {
     }
 
     #[test]
-    fn nested_directories_are_only_read_on_expansion() -> io::Result<()> {
+    fn directories_open_automatically_and_can_be_collapsed_and_reopened() -> io::Result<()> {
         let root = fixture();
         let nested = root.join("nested");
         fs::create_dir_all(&nested)?;
         fs::write(nested.join("child.txt"), b"x")?;
         let (mut tree, initial) = TreeState::open(&root)?;
-        assert_eq!(initial.len(), 1);
-        let expanded = tree.toggle_directory(&root, &nested)?;
-        assert_eq!(expanded.len(), 2);
-        assert!(tree.rows[1].prefix.contains("└──"));
+        assert_eq!(initial.len(), 2);
+        assert!(matches!(tree.rows[0].kind, RowKind::Entry { expanded: true }));
+        assert_eq!(initial[1].name, "child.txt");
         let collapsed = tree.toggle_directory(&root, &nested)?;
         assert_eq!(collapsed.len(), 1);
+        assert!(matches!(tree.rows[0].kind, RowKind::Entry { expanded: false }));
+        let reopened = tree.toggle_directory(&root, &nested)?;
+        assert_eq!(reopened.len(), 2);
+        assert!(matches!(tree.rows[0].kind, RowKind::Entry { expanded: true }));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn defaults_expand_only_two_directory_levels() -> io::Result<()> {
+        let root = fixture();
+        let first = root.join("a");
+        let second = first.join("b");
+        let third = second.join("c");
+        fs::create_dir_all(&third)?;
+        fs::write(third.join("hidden.txt"), b"x")?;
+        let (mut tree, initial) = TreeState::open(&root)?;
+        assert_eq!(initial.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]);
+        assert!(matches!(tree.rows[0].kind, RowKind::Entry { expanded: true }));
+        assert!(matches!(tree.rows[1].kind, RowKind::Entry { expanded: true }));
+        assert!(matches!(tree.rows[2].kind, RowKind::Entry { expanded: false }));
+        let opened = tree.toggle_directory(&root, &third)?;
+        assert_eq!(opened.len(), 4);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn auto_expansion_has_a_strict_branch_budget() -> io::Result<()> {
+        let root = fixture();
+        for index in 0..14 {
+            let dir = root.join(format!("folder_{index:02}"));
+            fs::create_dir(&dir)?;
+            fs::write(dir.join("inside.txt"), b"x")?;
+        }
+        let (tree, entries) = TreeState::open(&root)?;
+        let auto_open = tree.rows.iter().filter(|row|
+            matches!(row.kind, RowKind::Entry { expanded: true })
+        ).count();
+        assert_eq!(auto_open, MAX_AUTO_EXPAND);
+        assert_eq!(entries.len(), 14 + MAX_AUTO_EXPAND);
+        assert!(entries.len() <= MAX_VISIBLE);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn many_files_still_require_pagination() -> io::Result<()> {
+        let root = fixture();
+        let dir = root.join("src");
+        fs::create_dir(&dir)?;
+        for index in 0..80 {
+            fs::write(dir.join(format!("file_{index:03}.rs")), b"hi")?;
+        }
+        let (mut tree, initial) = TreeState::open(&root)?;
+        assert_eq!(initial.len(), 1 + PAGE_SIZE + 1);
+        let more_pos = tree.rows.iter().position(|row| matches!(row.kind, RowKind::More(_))).unwrap();
+        let more = tree.activate(&root, more_pos)?;
+        assert_eq!(more.len(), 1 + PAGE_SIZE * 2 + 1);
         fs::remove_dir_all(root)?;
         Ok(())
     }
