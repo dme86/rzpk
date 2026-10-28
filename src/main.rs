@@ -1378,7 +1378,7 @@ mod tests {
     }
     fn complete_job(app: &mut App) -> io::Result<()> {
         let started = Instant::now();
-        while app.job.is_some() {
+        while app.job.is_some() || !app.queue.is_empty() {
             app.poll_job();
             if started.elapsed() > Duration::from_secs(10) {
                 return Err(io::Error::other("Test worker did not finish"));
@@ -2123,7 +2123,7 @@ mod tests {
     }
 
     #[test]
-    fn job_runs_without_blocking_navigation_or_stacking_another() -> io::Result<()> {
+    fn job_runs_without_blocking_navigation_and_second_operation_is_queued() -> io::Result<()> {
         let (mut app, root) = transfer_fixture()?;
         app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
@@ -2131,10 +2131,92 @@ mod tests {
         app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.selected, 1);
         app.handle_key(key(KeyCode::Char('A'), KeyModifiers::SHIFT));
-        assert!(app.pending_archive.is_none());
-        assert!(app.error.as_deref().unwrap().contains("already running"));
+        assert!(app.pending_archive.is_some());
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.queue.len(), 1);
+        assert!(app.queue.iter().next().unwrap().description().contains("second.rs"));
+        let queue_line = app.queue_footer_line(120);
+        assert!(queue_line.spans.iter().any(|span| span.content.contains("1 waiting")));
         complete_job(&mut app)?;
         assert!(root.join("right/copy.txt").exists());
+        assert!(root.join("left/second.rs.tar.gz").exists());
+        assert!(app.queue.is_empty());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn jobs_modal_removes_waiting_job_without_canceling_active_worker() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        // Running copy.
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.job.is_some());
+
+        // First queued job: archive second.rs.
+        app.selected = 1;
+        app.handle_key(key(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.queue.len(), 1);
+
+        // Second queued job: copy second.rs.
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.queue.len(), 2);
+
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        for ch in "jobs".chars() { app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE)); }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.queue_open);
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE));
+        assert_eq!(app.queue.len(), 1);
+        assert!(app.queue.iter().next().unwrap().description().contains("Copy"));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.queue_open);
+
+        complete_job(&mut app)?;
+        assert!(root.join("right/copy.txt").exists());
+        assert!(root.join("right/second.rs").exists());
+        assert!(!root.join("left/second.rs.tar.gz").exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn queue_keeps_target_directory_snapshot_after_pane_navigation() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        app.selected = 1;
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.queue.len(), 1);
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.change_directory(root.join("beta"), None)?;
+        complete_job(&mut app)?;
+        assert!(root.join("right/second.rs").exists());
+        assert!(!root.join("beta/second.rs").exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_waiting_job_does_not_prevent_following_jobs() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        // First and second jobs target the same path. The second must fail
+        // safely, while the third can still create the archive.
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        app.selected = 1;
+        app.handle_key(key(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.queue.len(), 2);
+        complete_job(&mut app)?;
+        assert_eq!(fs::read_to_string(root.join("right/copy.txt"))?, "example");
+        assert!(root.join("left/second.rs.tar.gz").exists());
+        assert!(app.queue.is_empty());
         fs::remove_dir_all(root)?;
         Ok(())
     }
