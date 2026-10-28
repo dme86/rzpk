@@ -159,6 +159,35 @@ impl Work {
             Self::Archive(ArchiveJob::Unpack { .. }) => "Extracting",
         }
     }
+
+    /// Snapshot of the confirmed operation; independent of later pane navigation.
+    pub fn description(&self) -> String {
+        match self {
+            Self::Transfer(transfer) => {
+                let verb = transfer.kind.verb();
+                let items = if transfer.sources.len() == 1 {
+                    transfer.sources[0].file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "item".to_owned())
+                } else {
+                    format!("{} items", transfer.sources.len())
+                };
+                format!("{verb} {items} → {}", transfer.destination.display())
+            }
+            Self::Archive(archive) => match archive {
+                ArchiveJob::Pack { sources, target } => format!(
+                    "Pack {} item(s) → {}",
+                    sources.len(),
+                    target.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                ArchiveJob::Unpack { source, target } => format!(
+                    "Extract {} → {}",
+                    source.file_name().unwrap_or_default().to_string_lossy(),
+                    target.file_name().unwrap_or_default().to_string_lossy()
+                ),
+            }
+        }
+    }
 }
 
 pub enum Poll {
@@ -168,6 +197,7 @@ pub enum Poll {
 
 pub struct RunningJob {
     pub label: &'static str,
+    pub description: String,
     pub progress: Arc<Progress>,
     pub started: Instant,
     receiver: Receiver<io::Result<String>>,
@@ -178,6 +208,7 @@ impl RunningJob {
         let progress = Arc::new(Progress::new());
         let worker_progress = Arc::clone(&progress);
         let label = work.label();
+        let description = work.description();
         let (tx, rx) = mpsc::channel();
         thread::Builder::new()
             .name("rzpk-file-worker".to_owned())
@@ -194,6 +225,7 @@ impl RunningJob {
             })?;
         Ok(Self {
             label,
+            description,
             progress,
             started: Instant::now(),
             receiver: rx,
