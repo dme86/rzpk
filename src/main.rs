@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod details;
 mod fileops;
+mod jobs;
 mod pane;
 mod preview;
 mod render;
@@ -20,6 +21,7 @@ use commands::{Action, CommandAction, action_for, command_for, draw_help, help_m
 use config::{Config, MetadataPosition};
 use details::permissions;
 use fileops::{Transfer, TransferKind};
+use jobs::{Poll as JobPoll, RunningJob, Work};
 use render::maximum_name_width;
 use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_columns};
 use preview::Preview;
@@ -186,6 +188,7 @@ struct App {
     help_open: bool,
     help_scroll: usize,
     help_view_height: u16,
+    job: Option<RunningJob>,
 }
 
 impl App {
@@ -219,6 +222,8 @@ impl App {
             help_open: false,
             help_scroll: 0,
             help_view_height: 24,
+            job: None,
+            job: None,
         })
     }
 
@@ -510,6 +515,10 @@ impl App {
     }
 
     fn start_transfer(&mut self, kind: TransferKind) {
+        if self.job.is_some() {
+            self.error = Some("A file operation is already running".into());
+            return;
+        }
         let Some(other) = self.other.as_ref() else {
             self.error = Some("Open split view (:v) to copy or move files".to_string());
             return;
@@ -550,27 +559,52 @@ impl App {
         Ok(())
     }
 
+    fn begin_work(&mut self, work: Work) {
+        if self.job.is_some() {
+            self.error = Some("A file operation is already running".into());
+            return;
+        }
+        match RunningJob::start(work) {
+            Ok(job) => {
+                self.job = Some(job);
+                self.status = None;
+                self.error = None;
+                self.clear_typed();
+            }
+            Err(error) => self.error = Some(format!("Cannot start file operation: {error}")),
+        }
+    }
+
+    fn poll_job(&mut self) -> bool {
+        let Some(job) = self.job.as_ref() else {
+            return false;
+        };
+        let result = match job.poll() {
+            JobPoll::Busy => return true, // redraw the live progress indicator
+            JobPoll::Finished(result) => result,
+        };
+        self.job = None;
+        let refreshed = self.refresh_after_transfer();
+        match (result, refreshed) {
+            (Ok(status), Ok(())) => {
+                self.selection.clear();
+                self.status = Some(status);
+                self.error = None;
+            }
+            (Err(error), _) | (_, Err(error)) => {
+                self.status = None;
+                self.error = Some(format!("File operation failed: {error}"));
+            }
+        }
+        true
+    }
+
     fn handle_transfer_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc => { self.pending_transfer = None; }
+            KeyCode::Esc => self.pending_transfer = None,
             KeyCode::Enter => {
                 if let Some(transfer) = self.pending_transfer.take() {
-                    let kind = transfer.kind;
-                    let result = transfer.execute();
-                    if result.is_ok() {
-                        self.selection.clear();
-                    }
-                    let refreshed = self.refresh_after_transfer();
-                    match (result, refreshed) {
-                        (Ok(count), Ok(())) => {
-                            self.error = None;
-                            self.status = Some(format!("{} {} item(s)", kind.past_tense(), count));
-                        }
-                        (Err(error), _) | (_, Err(error)) => {
-                            self.status = None;
-                            self.error = Some(format!("{} failed: {error}", kind.verb()));
-                        }
-                    }
+                    self.begin_work(Work::Transfer(transfer));
                 }
             }
             _ => {}
@@ -618,6 +652,10 @@ impl App {
     }
 
     fn start_archive(&mut self, extract: bool) {
+        if self.job.is_some() {
+            self.error = Some("A file operation is already running".into());
+            return;
+        }
         let marked = self.selection.count() > 0;
         let sources = self.entries.iter().enumerate()
             .filter(|(index, _)| if marked { self.selection.contains(*index) } else { *index == self.selected })
@@ -652,19 +690,7 @@ impl App {
             KeyCode::Esc => self.pending_archive = None,
             KeyCode::Enter => {
                 if let Some(job) = self.pending_archive.take() {
-                    let result = job.execute();
-                    let refresh = self.refresh_after_transfer();
-                    match (result, refresh) {
-                        (Ok(status), Ok(())) => {
-                            self.error = None;
-                            self.status = Some(status);
-                            self.selection.clear();
-                        }
-                        (Err(error), _) | (_, Err(error)) => {
-                            self.status = None;
-                            self.error = Some(format!("Archive operation failed: {error}"));
-                        }
-                    }
+                    self.begin_work(Work::Archive(job));
                 }
             }
             _ => {}
@@ -717,7 +743,13 @@ impl App {
             KeyCode::Enter => {
                 let command = self.command.take().unwrap_or_default();
                 match command_for(&command) {
-                    Some(CommandAction::Quit) => self.running = false,
+                    Some(CommandAction::Quit) => {
+                        if self.job.is_some() {
+                            self.error = Some("Finish the running job before quitting".into());
+                        } else {
+                            self.running = false;
+                        }
+                    },
                     Some(CommandAction::Vertical) => {
                         if let Err(error) = self.toggle_vertical_split() {
                             self.error = Some(error.to_string());
@@ -759,7 +791,11 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         if action_for(key) == Some(Action::Quit) {
-            self.running = false;
+            if self.job.is_some() {
+                self.error = Some("Finish the running job before quitting".into());
+            } else {
+                self.running = false;
+            }
             return;
         }
 
@@ -810,7 +846,9 @@ impl App {
             Some(Action::Move) => self.start_transfer(TransferKind::Move),
             Some(Action::Archive) => self.start_archive(false),
             Some(Action::Extract) => self.start_archive(true),
-            Some(Action::Quit) => self.running = false,
+            Some(Action::Quit) => {
+                if self.job.is_none() { self.running = false; }
+            },
             None => {
                 if let KeyCode::Char(ch) = key.code
                     && !shift && !ctrl && !alt
@@ -976,6 +1014,9 @@ impl App {
             if let Some(other) = self.other.as_mut()
                 && other.expire_search(TYPE_TIMEOUT)
             {
+                needs_redraw = true;
+            }
+            if self.poll_job() {
                 needs_redraw = true;
             }
         }
