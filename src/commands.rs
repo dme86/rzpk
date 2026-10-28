@@ -14,7 +14,7 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Help, Quit, Command, SwitchPane, Parent, EnterDirectory, Open, Up, Down,
-    MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs, Jump(u8),
+    MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs, JumpPrefix, Jump(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -78,6 +78,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "→", description: "Enter focused folder", action: Action::EnterDirectory, input: Input::Plain(KeyCode::Right), section: "NAVIGATION" },
     Binding { label: "Type", description: "Search filename (prefix / substring)", action: Action::Command, input: Input::Plain(KeyCode::Null), section: "NAVIGATION" },
     Binding { label: "Alt/Cmd+1..9", description: "Jump to saved directory in active pane", action: Action::Jump(0), input: Input::JumpDigit, section: "NAVIGATION" },
+    Binding { label: "Ctrl+G then 1..9", description: "Portable jump: press Ctrl+G, then a slot digit", action: Action::JumpPrefix, input: Input::CtrlLetter('g'), section: "NAVIGATION" },
     Binding { label: "Shift+Up", description: "Extend selection upward", action: Action::MarkUp, input: Input::Shift(KeyCode::Up), section: "SELECTION" },
     Binding { label: "Shift+Down", description: "Extend selection downward", action: Action::MarkDown, input: Input::Shift(KeyCode::Down), section: "SELECTION" },
     Binding { label: "Shift+J", description: "Extend selection downward", action: Action::MarkDown, input: Input::ShiftLetter('j'), section: "SELECTION" },
@@ -229,6 +230,13 @@ mod tests {
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)), None);
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::ALT)), None);
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::CONTROL)), None);
+    }
+
+    #[test]
+    fn control_g_starts_portable_jump_chord() {
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)), Some(Action::JumpPrefix));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)), None);
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)), None);
     }
 
     #[test]
