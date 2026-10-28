@@ -26,6 +26,12 @@ metadata_position = "left"
 
 Set it to `"right"` to switch back. The XDG_CONFIG_HOME environment variable is supported. No config file is required for the default. Restart rzpk after changing it.
 
+## Remembered directory focus
+
+Each pane remembers the **last focused file or folder** in recently visited directories during the current rzpk session. For example, focus `README.md` inside `src/`, press `←` to leave and `→` to re-enter: `README.md` is focused again, along with the previous scroll position. This also works when returning via directory jumps, with tree/preview enabled, and independently in both split panes. Going up still focuses the folder you just left in the parent listing.
+
+Only the cursor focus is remembered; multi-file marks remain directory-scoped and do not automatically reappear. If the previously focused file was removed, rzpk falls back to the first available entry. Focus history is session-only, with an upper bound of 128 directories per pane, and is not saved to `config.toml`.
+
 ## Directory jumps
 
 Save up to **nine directory jumps** (slots 1–9) to switch instantly to frequently used paths such as `~/.config`, `/etc`, or project directories. Jumps work in normal, split, tree and preview modes and always change **only the active pane**.
