@@ -517,6 +517,100 @@ mod tests {
         assert_eq!(app.entries[app.selected].name, "downloads");
     }
 
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn shift_arrows_mark_ranges_and_can_shrink_them() {
+        let mut app = app((0..6).map(|index| sample(&format!("file{index}"), false)).collect());
+        app.selected = 1;
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(app.selected, 3);
+        assert_eq!(app.selection.count(), 3);
+        app.handle_key(key(KeyCode::Up, KeyModifiers::SHIFT));
+        assert_eq!(app.selected, 2);
+        assert_eq!(app.selection.count(), 2);
+        assert!(!app.selection.contains(3));
+    }
+
+    #[test]
+    fn normal_navigation_keeps_marked_range_and_new_range_adds() {
+        let mut app = app((0..6).map(|index| sample(&format!("file{index}"), false)).collect());
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(app.selected, 3);
+        assert_eq!(app.selection.count(), 4);
+        assert!((0..4).all(|index| app.selection.contains(index)));
+    }
+
+    #[test]
+    fn shift_j_and_k_extend_selection_instead_of_searching() {
+        let mut app = app(vec![
+            sample("apple", true),
+            sample("jellyfish", true),
+            sample("kiwi", true),
+        ]);
+        app.handle_key(key(KeyCode::Char('J'), KeyModifiers::SHIFT));
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.selection.count(), 2);
+        assert!(app.typed.is_empty());
+        // Some terminals send a capital letter without the SHIFT modifier.
+        app.handle_key(key(KeyCode::Char('K'), KeyModifiers::NONE));
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.selection.count(), 1);
+    }
+
+    #[test]
+    fn shift_space_toggles_distant_entries_without_clearing_previous_marks() {
+        let mut app = app((0..6).map(|index| sample(&format!("file{index}"), false)).collect());
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::SHIFT));
+        assert_eq!(app.selection.count(), 2);
+        assert!(app.selection.contains(0));
+        assert!(app.selection.contains(2));
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::SHIFT));
+        assert_eq!(app.selection.count(), 1);
+        assert!(!app.selection.contains(2));
+    }
+
+    #[test]
+    fn plain_space_is_a_fallback_if_terminal_does_not_report_shift() {
+        let mut app = app(vec![sample("file", false)]);
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 1);
+        assert!(app.typed.is_empty());
+    }
+
+    #[test]
+    fn shifted_other_letters_do_not_start_or_extend_search() {
+        let mut app = app(vec![sample("apple", true), sample("zebra", true)]);
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::SHIFT));
+        assert_eq!(app.selected, 0);
+        assert!(app.typed.is_empty());
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE));
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.typed, "z");
+    }
+
+    #[test]
+    fn selection_navigation_at_bounds_does_not_invent_indices() {
+        let mut empty = app(vec![]);
+        empty.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        empty.handle_key(key(KeyCode::Char(' '), KeyModifiers::SHIFT));
+        assert_eq!(empty.selection.count(), 0);
+
+        let mut single = app(vec![sample("file", false)]);
+        single.handle_key(key(KeyCode::Up, KeyModifiers::SHIFT));
+        single.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(single.selected, 0);
+        assert_eq!(single.selection.count(), 0);
+    }
+
     #[test]
     fn backspace_moves_to_parent_and_reselects_child() -> io::Result<()> {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -531,10 +625,12 @@ mod tests {
 
         let mut app = app(Vec::new());
         app.cwd = child.clone();
+        app.selection.toggle(0);
         app.parent()?;
 
         assert_eq!(app.cwd, parent);
         assert_eq!(app.entries[app.selected].path, child);
+        assert_eq!(app.selection.count(), 0);
         fs::remove_dir_all(parent)?;
         Ok(())
     }
