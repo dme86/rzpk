@@ -55,6 +55,17 @@ Only **24 entries per directory** are loaded initially, with folders sorted firs
 
 The tree works with the existing search, up/down navigation and marks. The active pane alone responds to input; switching between panes retains each one's tree state. `Backspace` still navigates to the parent of the current root. In very narrow windows, the tree is clipped horizontally rather than triggering unbounded layout work. No directory scanning happens in the drawing loop.
 
+## Copy and move
+
+In split view (`:v`), the **active pane is the source** and the other pane's **current directory is the destination**, regardless of whether you are copying left-to-right or right-to-left. Mark items with Space / Shift+arrows, or leave everything unmarked to operate on the focused item.
+
+- **Shift+C**: copy selected files and directories to the other pane
+- **Shift+M**: move selected files and directories to the other pane
+
+A confirmation dialog shows the source and destination. Press **Enter** to execute or **Esc** to cancel without losing marks. Existing targets never get silently overwritten: the operation is rejected before confirmation. Subdirectories and symlinks are copied without following symlinks, and selecting both a parent folder and a child transfers the parent only once.
+
+The ordinary lowercase `c` and `m` still start or refine the incremental search. In tree mode, the destination is the *other pane's current root directory*, not a highlighted subtree. Transfers are synchronous; large transfers may temporarily pause the UI. A failed multi-item operation can leave earlier completed items in place and reports an error.
+
 ## Keys
 
 | Key | Action |
@@ -63,6 +74,8 @@ The tree works with the existing search, up/down navigation and marks. The activ
 | `Shift+↑` / `Shift+↓` | Extend or shrink a contiguous selection |
 | `Shift+J` / `Shift+K` | Extend or shrink a selection down/up (also works as `J` / `K`) |
 | `Shift+Space` | Add or remove the highlighted file or directory from the selection |
+| `Shift+C` | Copy marks (or focused item) to the other split pane, after confirmation |
+| `Shift+M` | Move marks (or focused item) to the other split pane, after confirmation |
 | `Space` | Same toggle, for terminals that cannot distinguish Shift+Space |
 | `Type letters` | Jump to filenames by prefix, then substring (case-insensitive) |
 | `Enter` | Open the highlighted directory |
@@ -79,4 +92,4 @@ The tree works with the existing search, up/down navigation and marks. The activ
 
 Selected files and folders show a green checkmark and a distinct background. The number of marked items appears in the title. Shift+movement selects the starting entry and the ones traversed; reversing direction shrinks the active range. Existing marks remain when navigating normally, searching or adding non-adjacent entries. Entering a different directory clears the selection (selection is local to each directory view). Shift-modified letters never trigger the filename search. Pressing Esc in normal navigation clears every mark (including active range selections) without changing the focused entry.
 
-Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. If no filename starts with the typed text, rzpk searches for it anywhere in the name: typing `vim` can jump to `neovim`. A match at the beginning of a filename always takes priority over a substring match. After 900 ms of inactivity the typed query resets. The `:` command prompt currently supports `:q`, `:v`, `:p`, `:t` and `:n`, followed by Enter; Esc cancels the prompt while preserving any marks. There are no file operations or tabs yet.
+Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. If no filename starts with the typed text, rzpk searches for it anywhere in the name: typing `vim` can jump to `neovim`. A match at the beginning of a filename always takes priority over a substring match. After 900 ms of inactivity the typed query resets. The `:` command prompt currently supports `:q`, `:v`, `:p`, `:t` and `:n`, followed by Enter; Esc cancels the prompt while preserving any marks. There are no tabs yet.
