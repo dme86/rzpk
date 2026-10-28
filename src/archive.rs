@@ -5,12 +5,15 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, ErrorKind, Read},
     path::{Component, Path, PathBuf},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use bzip2::read::BzDecoder;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use xz2::read::XzDecoder;
+
+use crate::jobs::{Progress, TrackedReader, TrackedWriter};
 
 const MAX_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_FILES: usize = 20_000;
@@ -111,13 +114,21 @@ impl ArchiveJob {
     }
 
     pub fn execute(&self) -> io::Result<String> {
+        self.execute_internal(None)
+    }
+
+    pub fn execute_with_progress(&self, progress: &Arc<Progress>) -> io::Result<String> {
+        self.execute_internal(Some(progress))
+    }
+
+    fn execute_internal(&self, progress: Option<&Arc<Progress>>) -> io::Result<String> {
         match self {
             Self::Pack { sources, target } => {
-                create_tar_gz(sources, target)?;
+                create_tar_gz(sources, target, progress)?;
                 Ok(format!("Created {}", target.file_name().unwrap().to_string_lossy()))
             }
             Self::Unpack { source, target } => {
-                extract(source, target)?;
+                extract(source, target, progress)?;
                 Ok(format!("Extracted to {}", target.file_name().unwrap().to_string_lossy()))
             }
         }
@@ -167,10 +178,13 @@ fn detect_format(path: &Path) -> io::Result<Format> {
     Err(invalid("Unsupported archive type (tar, tar.gz, tar.xz, tar.bz2, zip)"))
 }
 
-fn create_tar_gz(sources: &[PathBuf], target: &Path) -> io::Result<()> {
+fn create_tar_gz(sources: &[PathBuf], target: &Path, progress: Option<&Arc<Progress>>) -> io::Result<()> {
     let file = OpenOptions::new().write(true).create_new(true).open(target)?;
+    if let Some(progress) = progress {
+        progress.set_total(sources.len());
+    }
     let result = (|| {
-        let writer = GzEncoder::new(file, Compression::default());
+        let writer = GzEncoder::new(TrackedWriter::optional(file, progress), Compression::default());
         let mut builder = tar::Builder::new(writer);
         builder.follow_symlinks(false); // never archive files outside via symlinks
         for source in sources {
@@ -180,10 +194,13 @@ fn create_tar_gz(sources: &[PathBuf], target: &Path) -> io::Result<()> {
             } else {
                 builder.append_path_with_name(source, name)?;
             }
+            if let Some(progress) = progress {
+                progress.item_done();
+            }
         }
         let writer = builder.into_inner()?;
         let result_file = writer.finish()?;
-        result_file.sync_all()
+        result_file.into_inner().sync_all()
     })();
     if result.is_err() {
         let _ = fs::remove_file(target);
@@ -210,15 +227,15 @@ fn safe_member(root: &Path, name: &Path) -> io::Result<PathBuf> {
     Ok(result)
 }
 
-fn extract(source: &Path, target: &Path) -> io::Result<()> {
+fn extract(source: &Path, target: &Path, progress: Option<&Arc<Progress>>) -> io::Result<()> {
     let format = detect_format(source)?;
     fs::create_dir(target)?; // exclusive folder: never merge/overwrite
     let result = (|| match format {
-        Format::Zip => extract_zip(source, target),
-        Format::Tar => extract_tar(File::open(source)?, target),
-        Format::Gzip => extract_tar(GzDecoder::new(File::open(source)?), target),
-        Format::Xz => extract_tar(XzDecoder::new(File::open(source)?), target),
-        Format::Bzip2 => extract_tar(BzDecoder::new(File::open(source)?), target),
+        Format::Zip => extract_zip(source, target, progress),
+        Format::Tar => extract_tar(TrackedReader::optional(File::open(source)?, progress), target, progress),
+        Format::Gzip => extract_tar(GzDecoder::new(TrackedReader::optional(File::open(source)?, progress)), target, progress),
+        Format::Xz => extract_tar(XzDecoder::new(TrackedReader::optional(File::open(source)?, progress)), target, progress),
+        Format::Bzip2 => extract_tar(BzDecoder::new(TrackedReader::optional(File::open(source)?, progress)), target, progress),
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(target); // remove only the folder we created
@@ -237,7 +254,7 @@ fn copy_bounded(reader: &mut impl Read, output: &mut File, total: &mut u64) -> i
     Ok(())
 }
 
-fn extract_tar<R: Read>(reader: R, root: &Path) -> io::Result<()> {
+fn extract_tar<R: Read>(reader: R, root: &Path, progress: Option<&Arc<Progress>>) -> io::Result<()> {
     let mut archive = tar::Archive::new(reader);
     let mut bytes = 0;
     let mut count = 0usize;
@@ -260,15 +277,21 @@ fn extract_tar<R: Read>(reader: R, root: &Path) -> io::Result<()> {
             // No links, devices, FIFOs, pax surprises, or traversal from untrusted archives.
             return Err(unsafe_archive(format!("Unsupported archive member type: {}", name.display())));
         }
+        if let Some(progress) = progress {
+            progress.item_done();
+        }
     }
     Ok(())
 }
 
-fn extract_zip(source: &Path, root: &Path) -> io::Result<()> {
+fn extract_zip(source: &Path, root: &Path, progress: Option<&Arc<Progress>>) -> io::Result<()> {
     let mut archive = zip::ZipArchive::new(File::open(source)?)
         .map_err(|e| unsafe_archive(format!("Invalid ZIP archive: {e}")))?;
     if archive.len() > MAX_ARCHIVE_FILES {
         return Err(unsafe_archive("ZIP archive has too many entries"));
+    }
+    if let Some(progress) = progress {
+        progress.set_total(archive.len());
     }
     let mut bytes = 0;
     for index in 0..archive.len() {
@@ -286,7 +309,11 @@ fn extract_zip(source: &Path, root: &Path) -> io::Result<()> {
         } else {
             if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
             let mut output = OpenOptions::new().write(true).create_new(true).open(&path)?;
-            copy_bounded(&mut item, &mut output, &mut bytes)?;
+            let mut reader = TrackedReader::optional(&mut item, progress);
+            copy_bounded(&mut reader, &mut output, &mut bytes)?;
+        }
+        if let Some(progress) = progress {
+            progress.item_done();
         }
     }
     Ok(())
