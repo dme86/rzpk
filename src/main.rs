@@ -12,6 +12,7 @@ mod fileops;
 mod jobs;
 mod pane;
 mod preview;
+mod queue;
 mod render;
 mod selection;
 mod tree;
@@ -25,6 +26,7 @@ use jobs::{Poll as JobPoll, RunningJob, Work};
 use render::maximum_name_width;
 use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_columns};
 use preview::Preview;
+use queue::WorkQueue;
 use tree::{RowKind, TreeState};
 use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -189,6 +191,9 @@ struct App {
     help_scroll: usize,
     help_view_height: u16,
     job: Option<RunningJob>,
+    queue: WorkQueue,
+    queue_open: bool,
+    queue_selected: usize,
 }
 
 impl App {
@@ -223,6 +228,9 @@ impl App {
             help_scroll: 0,
             help_view_height: 24,
             job: None,
+            queue: WorkQueue::default(),
+            queue_open: false,
+            queue_selected: 0,
         })
     }
 
@@ -514,8 +522,8 @@ impl App {
     }
 
     fn start_transfer(&mut self, kind: TransferKind) {
-        if self.job.is_some() {
-            self.error = Some("A file operation is already running".into());
+        if self.queue.len() >= queue::MAX_WAITING {
+            self.error = Some("Job queue is full".to_owned());
             return;
         }
         let Some(other) = self.other.as_ref() else {
@@ -558,35 +566,68 @@ impl App {
         Ok(())
     }
 
+    /// Confirmed jobs are snapshotted and processed in FIFO order.
+    /// Exactly one worker runs at a time; queued work is never spawned early.
     fn begin_work(&mut self, work: Work) {
+        if self.job.is_some() || !self.queue.is_empty() {
+            match self.queue.push(work) {
+                Ok(()) => {
+                    self.status = Some(format!("Queued operation ({} waiting)", self.queue.len()));
+                    self.error = None;
+                    self.clear_typed();
+                    self.start_next_job();
+                }
+                Err(error) => self.error = Some(error.to_string()),
+            }
+        } else {
+            match RunningJob::start(work) {
+                Ok(job) => {
+                    self.job = Some(job);
+                    self.status = None;
+                    self.error = None;
+                    self.clear_typed();
+                }
+                Err(error) => self.error = Some(format!("Cannot start file operation: {error}")),
+            }
+        }
+    }
+
+    fn start_next_job(&mut self) {
         if self.job.is_some() {
-            self.error = Some("A file operation is already running".into());
             return;
         }
-        match RunningJob::start(work) {
-            Ok(job) => {
-                self.job = Some(job);
-                self.status = None;
-                self.error = None;
-                self.clear_typed();
+        // A failed worker launch should never strand the rest of the queue.
+        while let Some(work) = self.queue.pop() {
+            match RunningJob::start(work) {
+                Ok(job) => {
+                    self.job = Some(job);
+                    break;
+                }
+                Err(error) => {
+                    self.status = None;
+                    self.error = Some(format!("Cannot start queued job: {error}"));
+                }
             }
-            Err(error) => self.error = Some(format!("Cannot start file operation: {error}")),
         }
+        self.queue_selected = self.queue_selected.min(self.queue.len().saturating_sub(1));
     }
 
     fn poll_job(&mut self) -> bool {
         let Some(job) = self.job.as_ref() else {
+            if !self.queue.is_empty() {
+                self.start_next_job();
+                return true;
+            }
             return false;
         };
         let result = match job.poll() {
-            JobPoll::Busy => return true, // redraw the live progress indicator
+            JobPoll::Busy => return true,
             JobPoll::Finished(result) => result,
         };
         self.job = None;
         let refreshed = self.refresh_after_transfer();
         match (result, refreshed) {
             (Ok(status), Ok(())) => {
-                self.selection.clear();
                 self.status = Some(status);
                 self.error = None;
             }
@@ -595,7 +636,29 @@ impl App {
                 self.error = Some(format!("File operation failed: {error}"));
             }
         }
+        // A failed operation does not block later independent queued jobs.
+        self.start_next_job();
         true
+    }
+
+    fn handle_queue_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('Q') => self.queue_open = false,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.queue_selected = self.queue_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.queue_selected = (self.queue_selected + 1)
+                    .min(self.queue.len().saturating_sub(1));
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                if self.queue.remove(self.queue_selected).is_some() {
+                    self.status = Some("Removed waiting job from queue".to_owned());
+                    self.queue_selected = self.queue_selected.min(self.queue.len().saturating_sub(1));
+                }
+            }
+            _ => {}
+        }
     }
 
     fn handle_transfer_key(&mut self, key: KeyEvent) {
@@ -651,8 +714,8 @@ impl App {
     }
 
     fn start_archive(&mut self, extract: bool) {
-        if self.job.is_some() {
-            self.error = Some("A file operation is already running".into());
+        if self.queue.len() >= queue::MAX_WAITING {
+            self.error = Some("Job queue is full".to_owned());
             return;
         }
         let marked = self.selection.count() > 0;
@@ -726,9 +789,63 @@ impl App {
         frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), dialog);
     }
 
+    fn draw_queue_dialog(&self, frame: &mut Frame, area: Rect) {
+        if !self.queue_open || area.width < 24 || area.height < 7 {
+            return;
+        }
+        let width = area.width.saturating_sub(2).min(92);
+        let height = area.height.saturating_sub(2).min(22);
+        let dialog = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
+        let visible = usize::from(height.saturating_sub(6)).max(1);
+        let start = if self.queue_selected >= visible {
+            self.queue_selected + 1 - visible
+        } else {
+            0
+        };
+        let mut lines = Vec::new();
+        if let Some(job) = &self.job {
+            lines.push(Line::from(vec![
+                Span::styled("  ▶ ACTIVE  ", Style::default().fg(Color::Rgb(184, 187, 38))),
+                Span::styled(job.description.clone(), Style::default().fg(Color::Rgb(235, 219, 178))),
+            ]));
+        } else {
+            lines.push(Line::styled("  No active job", Style::default().fg(Color::Rgb(146, 131, 116))));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            format!("  WAITING  ({})", self.queue.len()),
+            Style::default().fg(Color::Rgb(250, 189, 47)),
+        ));
+        if self.queue.is_empty() {
+            lines.push(Line::styled("  (empty)", Style::default().fg(Color::Rgb(146, 131, 116))));
+        }
+        for (index, work) in self.queue.iter().enumerate().skip(start).take(visible) {
+            let selected = index == self.queue_selected;
+            let color = if selected { Color::Rgb(250, 189, 47) } else { Color::Rgb(189, 174, 147) };
+            lines.push(Line::styled(
+                format!(" {} {:>2}. {}", if selected { "▸" } else { " " }, index + 1, work.description()),
+                Style::default().fg(color),
+            ));
+        }
+        let block = Block::default()
+            .title(" Jobs · ↑↓ select · Delete remove waiting · Esc close ")
+            .title_style(Style::default().fg(Color::Rgb(250, 189, 47)))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(146, 131, 116)))
+            .style(Style::default().bg(Color::Rgb(40, 40, 40)));
+        frame.render_widget(Clear, dialog);
+        frame.render_widget(Paragraph::new(lines).block(block), dialog);
+    }
+
     fn draw_overlays(&self, frame: &mut Frame, area: Rect) {
         self.draw_transfer_dialog(frame, area);
         self.draw_archive_dialog(frame, area);
+        self.draw_queue_dialog(frame, area);
         if self.help_open {
             draw_help(frame, area, self.help_scroll);
         }
@@ -743,8 +860,8 @@ impl App {
                 let command = self.command.take().unwrap_or_default();
                 match command_for(&command) {
                     Some(CommandAction::Quit) => {
-                        if self.job.is_some() {
-                            self.error = Some("Finish the running job before quitting".into());
+                        if self.job.is_some() || !self.queue.is_empty() {
+                            self.error = Some("Finish pending jobs before quitting".into());
                         } else {
                             self.running = false;
                         }
@@ -765,6 +882,7 @@ impl App {
                     Some(CommandAction::Move) => self.start_transfer(TransferKind::Move),
                     Some(CommandAction::Archive) => self.start_archive(false),
                     Some(CommandAction::Extract) => self.start_archive(true),
+                    Some(CommandAction::Jobs) => { self.queue_open = true; self.queue_selected = 0; },
                     None => self.error = Some(format!("unknown command: :{command}")),
                 }
             }
@@ -790,7 +908,7 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         if action_for(key) == Some(Action::Quit) {
-            if self.job.is_some() {
+            if self.job.is_some() || !self.queue.is_empty() {
                 self.error = Some("Finish the running job before quitting".into());
             } else {
                 self.running = false;
@@ -809,6 +927,11 @@ impl App {
                 KeyCode::PageDown => self.help_scroll = (self.help_scroll + 8).min(help_max_scroll(40)),
                 _ => {}
             }
+            return;
+        }
+
+        if self.queue_open {
+            self.handle_queue_key(key);
             return;
         }
 
@@ -845,8 +968,9 @@ impl App {
             Some(Action::Move) => self.start_transfer(TransferKind::Move),
             Some(Action::Archive) => self.start_archive(false),
             Some(Action::Extract) => self.start_archive(true),
+            Some(Action::Jobs) => { self.queue_open = true; self.queue_selected = 0; self.clear_typed(); },
             Some(Action::Quit) => {
-                if self.job.is_none() { self.running = false; }
+                if self.job.is_none() && self.queue.is_empty() { self.running = false; }
             },
             None => {
                 if let KeyCode::Char(ch) = key.code
@@ -1149,6 +1273,9 @@ mod tests {
             help_scroll: 0,
             help_view_height: 24,
             job: None,
+            queue: WorkQueue::default(),
+            queue_open: false,
+            queue_selected: 0,
         }
     }
 
