@@ -48,7 +48,7 @@ impl Input {
             Self::CtrlLetter(ch) => key.code == KeyCode::Char(ch) && ctrl && !alt,
             Self::JumpDigit => matches!(key.code, KeyCode::Char('1'..='9'))
                 && !ctrl && !shift
-                && (alt || key.modifiers.contains(KeyModifiers::SUPER)),
+                && (alt || key.modifiers.intersects(KeyModifiers::SUPER | KeyModifiers::META)),
         }
     }
 }
@@ -91,7 +91,7 @@ pub const BINDINGS: &[Binding] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, Copy, Move, Archive, Extract, Jobs, Jump(u8), JumpSet(u8), JumpDelete(u8) }
+pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, Copy, Move, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
 
 pub struct Command {
     pub name: &'static str,
@@ -110,6 +110,7 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "archive", description: "Create a .tar.gz archive", action: CommandAction::Archive },
     Command { name: "extract", description: "Extract selected archive", action: CommandAction::Extract },
     Command { name: "jobs", description: "Show and manage the file-operation queue", action: CommandAction::Jobs },
+    Command { name: "keys", description: "Inspect received keyboard events (Esc closes)", action: CommandAction::Keys },
     Command { name: "j1", description: "Jump to slot 1–9 (e.g. :j3)", action: CommandAction::Jump(1) },
     Command { name: "jset 1", description: "Save active directory to slot 1–9", action: CommandAction::JumpSet(1) },
     Command { name: "jdel 1", description: "Remove a saved jump (1–9)", action: CommandAction::JumpDelete(1) },
@@ -224,6 +225,7 @@ mod tests {
     fn alt_or_super_digit_activates_jump_without_disrupting_plain_numbers() {
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT)), Some(Action::Jump(1)));
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::SUPER)), Some(Action::Jump(9)));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::META)), Some(Action::Jump(6)));
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)), None);
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::ALT)), None);
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::CONTROL)), None);
