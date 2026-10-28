@@ -185,6 +185,7 @@ struct App {
     pending_archive: Option<ArchiveJob>,
     help_open: bool,
     help_scroll: usize,
+    help_view_height: u16,
 }
 
 impl App {
@@ -217,6 +218,7 @@ impl App {
             pending_archive: None,
             help_open: false,
             help_scroll: 0,
+            help_view_height: 24,
         })
     }
 
@@ -766,7 +768,7 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('?') => self.help_open = false,
                 KeyCode::Up | KeyCode::Char('k') => self.help_scroll = self.help_scroll.saturating_sub(1),
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.help_scroll = (self.help_scroll + 1).min(help_max_scroll(40));
+                    self.help_scroll = (self.help_scroll + 1).min(help_max_scroll(self.help_view_height));
                 }
                 KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(8),
                 KeyCode::PageDown => self.help_scroll = (self.help_scroll + 8).min(help_max_scroll(40)),
@@ -821,6 +823,7 @@ impl App {
 
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
+        self.help_view_height = area.height;
         if area.height == 0 || area.width == 0 {
             return;
         }
@@ -1030,6 +1033,7 @@ mod tests {
             pending_archive: None,
             help_open: false,
             help_scroll: 0,
+            help_view_height: 24,
         }
     }
 
@@ -1729,6 +1733,89 @@ mod tests {
         assert_eq!(app.pending_transfer.as_ref().unwrap().sources.len(), 1);
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(root.join("right/folder/child.txt").exists());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn help_opens_scrolls_and_esc_only_closes_help() {
+        let mut app = app(vec![sample("file.txt", false)]);
+        app.selection.toggle(0);
+        app.handle_key(key(KeyCode::Char('?'), KeyModifiers::SHIFT));
+        assert!(app.help_open);
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.help_scroll, 1);
+        app.handle_key(key(KeyCode::Char('c'), KeyModifiers::NONE));
+        assert!(app.typed.is_empty());
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.help_open);
+        assert_eq!(app.selection.count(), 1);
+        assert!(app.running);
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 0);
+    }
+
+    #[test]
+    fn archive_shortcut_confirmation_and_extraction_roundtrip() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        // Archive the explicitly marked notes.txt, not the focused folder.
+        let index = app.entries.iter().position(|entry| entry.name == "notes.txt").unwrap();
+        app.selection.toggle(index);
+        app.handle_key(key(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert!(app.pending_archive.is_some());
+        assert!(!root.join("notes.txt.tar.gz").exists());
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.status.as_deref(), Some("Created notes.txt.tar.gz"));
+        assert!(root.join("notes.txt.tar.gz").exists());
+        assert!(root.join("notes.txt").exists());
+        assert_eq!(app.selection.count(), 0);
+
+        // Shift+E extracts into a new folder.
+        let index = app.entries.iter().position(|entry| entry.name == "notes.txt.tar.gz").unwrap();
+        app.selected = index;
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::SHIFT));
+        assert!(app.pending_archive.is_some());
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.status.as_deref(), Some("Extracted to notes.txt"));
+        assert_eq!(fs::read_to_string(root.join("notes.txt/notes.txt"))?, "sample");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn archive_dialog_escape_cancels_without_writing() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        let index = app.entries.iter().position(|entry| entry.name == "notes.txt").unwrap();
+        app.selected = index;
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::SHIFT));
+        assert!(app.pending_archive.is_some());
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.pending_archive.is_none());
+        assert!(!root.join("notes.txt.tar.gz").exists());
+        assert!(app.running);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn archive_commands_are_registered_and_lowercase_remains_search() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert!(app.pending_archive.is_none());
+        assert_eq!(app.entries[app.selected].name, "notes.txt");
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        for ch in "archive".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.pending_archive.is_some());
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
         fs::remove_dir_all(root)?;
         Ok(())
     }
