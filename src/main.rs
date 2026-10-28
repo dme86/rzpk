@@ -1212,6 +1212,18 @@ mod tests {
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
     }
+    fn complete_job(app: &mut App) -> io::Result<()> {
+        let started = Instant::now();
+        while app.job.is_some() {
+            app.poll_job();
+            if started.elapsed() > Duration::from_secs(10) {
+                return Err(io::Error::other("Test worker did not finish"));
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        Ok(())
+    }
+
 
     #[test]
     fn shift_arrows_mark_ranges_and_can_shrink_them() {
@@ -1751,6 +1763,8 @@ mod tests {
         assert!(!root.join("right/copy.txt").exists());
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.pending_transfer.is_none());
+        assert!(app.job.is_some());
+        complete_job(&mut app)?;
         assert_eq!(fs::read_to_string(root.join("right/copy.txt"))?, "example");
         assert!(root.join("right/second.rs").exists());
         assert!(root.join("left/copy.txt").exists());
@@ -1771,6 +1785,7 @@ mod tests {
         app.handle_key(key(KeyCode::Char('m'), KeyModifiers::SHIFT));
         assert_eq!(app.pending_transfer.as_ref().unwrap().kind, TransferKind::Move);
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        complete_job(&mut app)?;
         assert!(!root.join("right/from_right.txt").exists());
         assert_eq!(fs::read_to_string(root.join("left/from_right.txt"))?, "right");
         assert!(app.active_right);
@@ -1841,6 +1856,7 @@ mod tests {
         app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
         assert_eq!(app.pending_transfer.as_ref().unwrap().sources.len(), 1);
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        complete_job(&mut app)?;
         assert!(root.join("right/folder/child.txt").exists());
         fs::remove_dir_all(root)?;
         Ok(())
@@ -1876,6 +1892,8 @@ mod tests {
         assert!(app.pending_archive.is_some());
         assert!(!root.join("notes.txt.tar.gz").exists());
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.job.is_some());
+        complete_job(&mut app)?;
         assert_eq!(app.status.as_deref(), Some("Created notes.txt.tar.gz"));
         assert!(root.join("notes.txt.tar.gz").exists());
         assert!(root.join("notes.txt").exists());
@@ -1887,6 +1905,7 @@ mod tests {
         app.handle_key(key(KeyCode::Char('e'), KeyModifiers::SHIFT));
         assert!(app.pending_archive.is_some());
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        complete_job(&mut app)?;
         assert_eq!(app.status.as_deref(), Some("Extracted to notes.txt-extracted"));
         assert_eq!(fs::read_to_string(root.join("notes.txt-extracted/notes.txt"))?, "sample");
         fs::remove_dir_all(root)?;
@@ -1925,6 +1944,33 @@ mod tests {
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.pending_archive.is_some());
         app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn footer_has_idle_hints_and_error_feedback() {
+        let mut app = app(vec![]);
+        let idle = app.footer_line().spans.iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert!(idle.contains("? help"));
+        app.error = Some("Permission denied".to_string());
+        let error = app.footer_line().spans.iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert!(error.contains("Permission denied"));
+    }
+
+    #[test]
+    fn job_runs_without_blocking_navigation_or_stacking_another() -> io::Result<()> {
+        let (mut app, root) = transfer_fixture()?;
+        app.handle_key(key(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.job.is_some());
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.selected, 1);
+        app.handle_key(key(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert!(app.pending_archive.is_none());
+        assert!(app.error.as_deref().unwrap().contains("already running"));
+        complete_job(&mut app)?;
+        assert!(root.join("right/copy.txt").exists());
         fs::remove_dir_all(root)?;
         Ok(())
     }
