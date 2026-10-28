@@ -69,13 +69,16 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn percent(self) -> Option<u64> {
-        if self.total_bytes > 0 {
-            Some(self.bytes.min(self.total_bytes).saturating_mul(100) / self.total_bytes)
-        } else if self.total > 0 {
-            Some(self.items.min(self.total).saturating_mul(100) / self.total)
-        } else {
-            None
-        }
+        self.bytes
+            .min(self.total_bytes)
+            .saturating_mul(100)
+            .checked_div(self.total_bytes)
+            .or_else(|| {
+                self.items
+                    .min(self.total)
+                    .saturating_mul(100)
+                    .checked_div(self.total)
+            })
     }
 }
 
