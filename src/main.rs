@@ -7,10 +7,12 @@ use std::{
 mod config;
 mod details;
 mod render;
+mod selection;
 
 use config::{Config, MetadataPosition};
 use details::{Columns, permissions};
 use render::{entry_line, maximum_name_width};
+use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -123,6 +125,7 @@ struct App {
     max_name_width: usize,
     metadata_position: MetadataPosition,
     selected: usize,
+    selection: Selection,
     scroll: usize,
     typed: String,
     last_typed: Option<Instant>,
@@ -142,6 +145,7 @@ impl App {
             max_name_width,
             metadata_position,
             selected: 0,
+            selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
             last_typed: None,
@@ -159,6 +163,7 @@ impl App {
         self.max_name_width = maximum_name_width(&entries);
         self.entries = entries;
         self.selected = selected;
+        self.selection.clear();
         self.scroll = 0;
         self.clear_typed();
         self.error = None;
@@ -214,12 +219,14 @@ impl App {
         prefix.push(ch);
 
         if let Some(index) = self.find_match(&prefix) {
+            self.selection.commit();
             self.selected = index;
             self.typed = prefix;
         } else {
             // If the longer prefix has no match, treat the last key as a new search.
             let single = ch.to_string();
             if let Some(index) = self.find_match(&single) {
+                self.selection.commit();
                 self.selected = index;
                 self.typed = single;
             } else {
@@ -229,12 +236,40 @@ impl App {
         self.last_typed = Some(now);
     }
 
+    fn move_cursor(&mut self, direction: i8, extend: bool) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let next = if direction < 0 {
+            self.selected.saturating_sub(1)
+        } else {
+            (self.selected + 1).min(self.entries.len() - 1)
+        };
+        if extend {
+            if next != self.selected {
+                self.selection.extend(self.selected, next);
+            }
+        } else {
+            self.selection.commit();
+        }
+        self.selected = next;
+        self.clear_typed();
+    }
+
+    fn toggle_current(&mut self) {
+        if !self.entries.is_empty() {
+            self.selection.toggle(self.selected);
+        }
+        self.clear_typed();
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Esc => self.running = false,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.running = false;
-            }
+            KeyCode::Char('c') if ctrl => self.running = false,
             KeyCode::Backspace => {
                 if let Err(error) = self.parent() {
                     self.error = Some(error.to_string());
@@ -245,22 +280,17 @@ impl App {
                     self.error = Some(error.to_string());
                 }
             }
-            KeyCode::Up => {
-                self.selected = self.selected.saturating_sub(1);
-                self.clear_typed();
-            }
-            KeyCode::Down => {
-                if !self.entries.is_empty() {
-                    self.selected = (self.selected + 1).min(self.entries.len() - 1);
-                }
-                self.clear_typed();
-            }
-            KeyCode::Char(ch)
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                self.jump_to(ch);
-            }
+            KeyCode::Up if !ctrl && !alt => self.move_cursor(-1, shift),
+            KeyCode::Down if !ctrl && !alt => self.move_cursor(1, shift),
+            // Uppercase J/K also works when a terminal omits the Shift modifier.
+            KeyCode::Char('J') if !ctrl && !alt => self.move_cursor(1, true),
+            KeyCode::Char('K') if !ctrl && !alt => self.move_cursor(-1, true),
+            KeyCode::Char('j') if shift && !ctrl && !alt => self.move_cursor(1, true),
+            KeyCode::Char('k') if shift && !ctrl && !alt => self.move_cursor(-1, true),
+            // A few terminals report Shift+Space as plain Space. Accept both.
+            KeyCode::Char(' ') if !ctrl && !alt => self.toggle_current(),
+            // Typed search must never swallow Shift-modified keys.
+            KeyCode::Char(ch) if !shift && !ctrl && !alt => self.jump_to(ch),
             _ => {}
         }
     }
@@ -281,6 +311,12 @@ impl App {
             Span::raw("  "),
             Span::styled(self.cwd.display().to_string(), Style::default().fg(Color::DarkGray)),
         ];
+        if self.selection.count() > 0 {
+            title.push(Span::styled(
+                format!("  {} marked", self.selection.count()),
+                Style::default().fg(Color::Rgb(91, 205, 160)),
+            ));
+        }
         if !self.typed.is_empty() {
             title.push(Span::styled(
                 format!("  /{}", self.typed),
@@ -320,15 +356,19 @@ impl App {
         let columns = Columns::for_width(area.width);
         let now = SystemTime::now();
         for (row, entry) in self.entries.iter().skip(self.scroll).take(height).enumerate() {
-            let selected = self.scroll + row == self.selected;
-            let background = if selected {
-                Style::default().bg(Color::Rgb(36, 51, 69))
-            } else {
-                Style::default()
+            let index = self.scroll + row;
+            let selected = index == self.selected;
+            let marked = self.selection.contains(index);
+            let background = match (selected, marked) {
+                (true, true) => Style::default().bg(Color::Rgb(37, 75, 65)),
+                (true, false) => Style::default().bg(Color::Rgb(36, 51, 69)),
+                (false, true) => Style::default().bg(Color::Rgb(27, 53, 48)),
+                (false, false) => Style::default(),
             };
             let line = entry_line(
                 entry,
                 selected,
+                marked,
                 columns,
                 self.metadata_position,
                 self.max_name_width,
@@ -405,6 +445,7 @@ mod tests {
             metadata_position: MetadataPosition::Right,
             entries,
             selected: 0,
+            selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
             last_typed: None,
