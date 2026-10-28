@@ -66,6 +66,19 @@ A confirmation dialog shows the source and destination. Press **Enter** to execu
 
 The ordinary lowercase `c` and `m` still start or refine the incremental search. In tree mode, the destination is the *other pane's current root directory*, not a highlighted subtree. Transfers are synchronous; large transfers may temporarily pause the UI. A failed multi-item operation can leave earlier completed items in place and reports an error.
 
+## Built-in help
+
+Press **`?`** anywhere during normal navigation to open the scrollable help window. `Esc` (or `?`) closes it without changing your selection or active modes. Scroll the help with `↑` / `↓` or `PageUp` / `PageDown`. Keyboard shortcuts and colon commands are both registered centrally in `src/commands.rs`, and the help is generated directly from those tables. Add future commands there so the executable and its help stay synchronized.
+
+## Archives
+
+- **Shift+A** creates a `.tar.gz` from the marked files/folders, or the focused entry when nothing is marked, in the active pane's current directory.
+- **Shift+E** detects the focused archive format and extracts it into a **new, dedicated subfolder** named after the archive.
+- `:archive` and `:extract` work too, without needing function keys.
+- Supported extraction: `.zip`, `.tar`, `.tar.gz` / `.tgz`, `.tar.xz`, `.tar.bz2` (format detected by file signature wherever possible). Other types such as `.7z` are not yet supported.
+
+Both actions require confirmation with **Enter**; **Esc** cancels. Existing target files/folders are never overwritten. Extraction rejects unsafe paths, symlinks, special filesystem entries, or archives exceeding 20,000 entries / 2 GiB uncompressed. Failures remove the newly created extraction folder. Archive operations currently run synchronously, so very large archives may temporarily freeze the UI.
+
 ## Keys
 
 | Key | Action |
@@ -75,6 +88,9 @@ The ordinary lowercase `c` and `m` still start or refine the incremental search.
 | `Shift+J` / `Shift+K` | Extend or shrink a selection down/up (also works as `J` / `K`) |
 | `Shift+Space` | Add or remove the highlighted file or directory from the selection |
 | `Shift+C` | Copy marks (or focused item) to the other split pane, after confirmation |
+| `Shift+A` | Create .tar.gz from marks (or the focused entry) |
+| `Shift+E` | Extract selected archive into a new folder |
+| `?` | Show the scrollable help popup; Esc closes it |
 | `Shift+M` | Move marks (or focused item) to the other split pane, after confirmation |
 | `Space` | Same toggle, for terminals that cannot distinguish Shift+Space |
 | `Type letters` | Jump to filenames by prefix, then substring (case-insensitive) |
@@ -92,4 +108,4 @@ The ordinary lowercase `c` and `m` still start or refine the incremental search.
 
 Selected files and folders show a green checkmark and a distinct background. The number of marked items appears in the title. Shift+movement selects the starting entry and the ones traversed; reversing direction shrinks the active range. Existing marks remain when navigating normally, searching or adding non-adjacent entries. Entering a different directory clears the selection (selection is local to each directory view). Shift-modified letters never trigger the filename search. Pressing Esc in normal navigation clears every mark (including active range selections) without changing the focused entry.
 
-Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. If no filename starts with the typed text, rzpk searches for it anywhere in the name: typing `vim` can jump to `neovim`. A match at the beginning of a filename always takes priority over a substring match. After 900 ms of inactivity the typed query resets. The `:` command prompt currently supports `:q`, `:v`, `:p`, `:t` and `:n`, followed by Enter; Esc cancels the prompt while preserving any marks. There are no tabs yet.
+Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. If no filename starts with the typed text, rzpk searches for it anywhere in the name: typing `vim` can jump to `neovim`. A match at the beginning of a filename always takes priority over a substring match. After 900 ms of inactivity the typed query resets. The `:` command prompt currently supports `:q`, `:v`, `:p`, `:t`, `:n`, `:cp`, `:mv`, `:archive` and `:extract`, followed by Enter; Esc cancels the prompt while preserving any marks. There are no tabs yet.
