@@ -13,7 +13,7 @@ use ratatui::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
-    Help, Quit, Command, SwitchPane, Parent, Open, Up, Down,
+    Help, Quit, Command, SwitchPane, Parent, EnterDirectory, Open, Up, Down,
     MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs,
 }
 
@@ -68,8 +68,10 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "Shift+Tab", description: "Switch split panes", action: Action::SwitchPane, input: Input::Any(KeyCode::BackTab), section: "NAVIGATION" },
     Binding { label: "Up", description: "Previous entry", action: Action::Up, input: Input::Plain(KeyCode::Up), section: "NAVIGATION" },
     Binding { label: "Down", description: "Next entry", action: Action::Down, input: Input::Plain(KeyCode::Down), section: "NAVIGATION" },
-    Binding { label: "Enter", description: "Open folder / toggle tree branch", action: Action::Open, input: Input::Any(KeyCode::Enter), section: "NAVIGATION" },
+    Binding { label: "Enter", description: "Open file in $EDITOR / folder / toggle tree", action: Action::Open, input: Input::Any(KeyCode::Enter), section: "NAVIGATION" },
     Binding { label: "Backspace", description: "Go to parent folder", action: Action::Parent, input: Input::Any(KeyCode::Backspace), section: "NAVIGATION" },
+    Binding { label: "←", description: "Go to parent folder", action: Action::Parent, input: Input::Plain(KeyCode::Left), section: "NAVIGATION" },
+    Binding { label: "→", description: "Enter focused folder", action: Action::EnterDirectory, input: Input::Plain(KeyCode::Right), section: "NAVIGATION" },
     Binding { label: "Type", description: "Search filename (prefix / substring)", action: Action::Command, input: Input::Plain(KeyCode::Null), section: "NAVIGATION" },
     Binding { label: "Shift+Up", description: "Extend selection upward", action: Action::MarkUp, input: Input::Shift(KeyCode::Up), section: "SELECTION" },
     Binding { label: "Shift+Down", description: "Extend selection downward", action: Action::MarkDown, input: Input::Shift(KeyCode::Down), section: "SELECTION" },
