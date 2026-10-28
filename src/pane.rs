@@ -20,6 +20,7 @@ use crate::{
     details::Columns,
     render::{EntryHighlight, entry_line, maximum_name_width},
     selection::Selection,
+    tree::{TreeRow, TreeState, RowKind},
 };
 
 pub struct PaneState {
@@ -33,6 +34,7 @@ pub struct PaneState {
     pub last_typed: Option<Instant>,
     pub error: Option<String>,
     pub preview: Option<Preview>,
+    pub tree: Option<TreeState>,
 }
 
 impl PaneState {
@@ -51,6 +53,7 @@ impl PaneState {
             last_typed: None,
             error: None,
             preview: None,
+            tree: None,
         })
     }
 
@@ -65,11 +68,52 @@ impl PaneState {
             typed: &self.typed,
             error: self.error.as_deref(),
             preview: self.preview.as_ref(),
+            tree_rows: self.tree.as_ref().map(|tree| tree.rows.as_slice()),
         }
     }
 
+    pub fn enable_tree(&mut self) -> io::Result<()> {
+        let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+        let (tree, entries) = TreeState::open(&self.cwd)?;
+        self.tree = Some(tree);
+        self.replace_entries(entries, focus.as_deref());
+        Ok(())
+    }
+
+    pub fn disable_tree(&mut self) -> io::Result<()> {
+        let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+        let entries = read_directory(&self.cwd)?;
+        self.tree = None;
+        self.replace_entries(entries, focus.as_deref());
+        Ok(())
+    }
+
+    fn replace_entries(&mut self, entries: Vec<Entry>, focus: Option<&Path>) {
+        let marked = self.entries.iter().enumerate()
+            .filter(|(index, _)| self.selection.contains(*index)
+                && self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
+            .map(|(_, entry)| entry.path.clone()).collect::<Vec<_>>();
+        self.max_name_width = maximum_name_width(&entries);
+        self.selected = focus.and_then(|path| entries.iter().position(|entry| &entry.path == path)).unwrap_or(0);
+        self.entries = entries;
+        self.selection.clear();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if marked.contains(&entry.path) {
+                self.selection.toggle(index);
+            }
+        }
+        self.scroll = 0;
+        self.typed.clear();
+        self.last_typed = None;
+        self.refresh_preview();
+    }
+
     pub fn refresh_preview(&mut self) {
-        self.preview = Preview::selected(&self.entries, self.selected);
+        self.preview = if self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
+            Preview::selected(&self.entries, self.selected)
+        } else {
+            None
+        };
     }
 
     pub fn expire_search(&mut self, timeout: std::time::Duration) -> bool {
@@ -93,6 +137,7 @@ pub struct PaneView<'a> {
     pub typed: &'a str,
     pub error: Option<&'a str>,
     pub preview: Option<&'a Preview>,
+    pub tree_rows: Option<&'a [TreeRow]>,
 }
 
 pub fn draw_pane_header(frame: &mut Frame, area: Rect, view: &PaneView<'_>, active: bool) {
@@ -178,15 +223,41 @@ pub fn draw_entries(
             (false, true) => Style::default().bg(Color::Rgb(27, 53, 48)),
             (false, false) => Style::default(),
         };
-        let line = entry_line(
+        let mut line = entry_line(
             entry,
             EntryHighlight { focused, marked },
-            columns,
+            if view.tree_rows.is_some() { Columns::Names } else { columns },
             metadata_position,
             view.max_name_width,
             area.width,
             now,
         );
+        if let Some(tree_row) = view.tree_rows.and_then(|rows| rows.get(index)) {
+            // Insert an indented branch after the selection checkmark.
+            let branch_color = Color::Rgb(146, 131, 116);
+            let label = match &tree_row.kind {
+                RowKind::More(_) => "… ",
+                RowKind::Limit => "· ",
+                RowKind::Entry { expanded: true } if entry.is_dir => "▾ ",
+                RowKind::Entry { .. } if entry.is_dir => "▸ ",
+                RowKind::Entry { .. } => "  ",
+            };
+            if !tree_row.real_entry() {
+                line = Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(tree_row.prefix.clone(), Style::default().fg(branch_color)),
+                    Span::styled(
+                        entry.name.clone(),
+                        Style::default().fg(Color::Rgb(250, 189, 47)),
+                    ),
+                ]);
+            } else {
+                line.spans.insert(1, Span::styled(
+                    format!("{}{label}", tree_row.prefix),
+                    Style::default().fg(branch_color),
+                ));
+            }
+        }
         frame.render_widget(
             Paragraph::new(line).style(background),
             Rect::new(area.x, area.y + row as u16, area.width, 1),
