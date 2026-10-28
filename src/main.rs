@@ -11,7 +11,7 @@ mod render;
 mod selection;
 
 use config::{Config, MetadataPosition};
-use details::{Columns, permissions};
+use details::permissions;
 use render::maximum_name_width;
 use pane::{PaneState, PaneView, draw_entries, draw_split_pane, use_two_columns};
 use selection::Selection;
