@@ -109,6 +109,17 @@ impl PaneState {
         self.refresh_preview();
     }
 
+    pub fn refresh_listing(&mut self) -> io::Result<()> {
+        let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+        let entries = if let Some(tree) = self.tree.as_mut() {
+            tree.rebuild(&self.cwd)?
+        } else {
+            read_directory(&self.cwd)?
+        };
+        self.replace_entries(entries, focus.as_deref());
+        Ok(())
+    }
+
     pub fn refresh_preview(&mut self) {
         self.preview = if self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
             Preview::selected(&self.entries, self.selected)
