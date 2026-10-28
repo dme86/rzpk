@@ -41,8 +41,12 @@ impl Preview {
             }
         } else if entry.is_dir {
             directory_preview(&entry.path)
-        } else {
+        } else if fs::symlink_metadata(&entry.path)
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+        {
             file_preview(&entry.path)
+        } else {
+            vec!["(not a regular file — no text preview)".to_string()]
         };
         Self { title, lines }
     }
