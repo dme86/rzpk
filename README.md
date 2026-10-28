@@ -32,6 +32,19 @@ Type `:v` and press Enter to open two side-by-side views. The right pane starts 
 
 Type `:v` again to close the split and retain the left pane. On a terminal narrower than 42 columns, only the active pane is rendered until there is enough space, but both panes keep their state.
 
+## Modes
+
+The modes are independent and can be combined:
+
+- `:v` toggles a vertical split with two independent directory views, indicated by **[v]** in muted Gruvbox blue.
+- `:p` toggles a preview of the highlighted item, indicated by **[p]** in Gruvbox yellow. It shows bounded UTF-8 text previews, directory contents, and symlink targets; binary files show a placeholder.
+- `:v` together with `:p` enables a **separate preview in each pane**, updated by that pane's cursor and navigation.
+- `:n` returns to the normal single-list view, removing both modes and keeping the left pane's directory.
+
+`Esc` **never disables a mode**. It cancels an active command or clears marks in the active pane. `:v` / `:p` turn off their respective modes without affecting the other. `:n` is the explicit reset.
+
+Previews adapt to terminal size: beside the list in wide panes, below it in narrower ones, and temporarily hidden in extremely small windows. Only the first 24 KiB / 120 lines of a file, or up to 60 directory entries, are read. No preview files are accessed during rendering.
+
 ## Keys
 
 | Key | Action |
@@ -48,8 +61,10 @@ Type `:v` again to close the split and retain the left pane. On a terminal narro
 | `Ctrl+C` | Quit immediately |
 | `:q` then `Enter` | Quit through the command prompt |
 | `:v` then `Enter` | Toggle a vertical split, initially showing the same directory in both panes |
+| `:p` then `Enter` | Toggle a preview for every visible pane |
+| `:n` then `Enter` | Return to normal mode (neither split nor preview) |
 | `Tab` | Switch the active pane while split view is open |
 
 Selected files and folders show a green checkmark and a distinct background. The number of marked items appears in the title. Shift+movement selects the starting entry and the ones traversed; reversing direction shrinks the active range. Existing marks remain when navigating normally, searching or adding non-adjacent entries. Entering a different directory clears the selection (selection is local to each directory view). Shift-modified letters never trigger the filename search. Pressing Esc in normal navigation clears every mark (including active range selections) without changing the focused entry.
 
-Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. If no filename starts with the typed text, rzpk searches for it anywhere in the name: typing `vim` can jump to `neovim`. A match at the beginning of a filename always takes priority over a substring match. After 900 ms of inactivity the typed query resets. The `:` command prompt currently supports `:q` and `:v`, followed by Enter; Esc cancels the prompt while preserving any marks. There are no file operations, previews, or tabs yet.
+Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. If no filename starts with the typed text, rzpk searches for it anywhere in the name: typing `vim` can jump to `neovim`. A match at the beginning of a filename always takes priority over a substring match. After 900 ms of inactivity the typed query resets. The `:` command prompt currently supports `:q`, `:v`, `:p` and `:n`, followed by Enter; Esc cancels the prompt while preserving any marks. There are no file operations or tabs yet.
