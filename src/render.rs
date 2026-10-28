@@ -109,6 +109,7 @@ fn metadata_spans(entry: &Entry, columns: Columns, now: SystemTime) -> Vec<Span<
 pub fn entry_line(
     entry: &Entry,
     selected: bool,
+    marked: bool,
     columns: Columns,
     position: MetadataPosition,
     max_name_width: usize,
@@ -117,7 +118,11 @@ pub fn entry_line(
 ) -> Line<'static> {
     let (icon, icon_color) = entry.icon_and_color(selected);
     let name_color = if selected { Color::White } else { Color::Gray };
-    let mut spans = vec![Span::raw("  ")];
+    let mut spans = vec![if marked {
+        Span::styled("✓ ", Style::default().fg(Color::Rgb(91, 205, 160)))
+    } else {
+        Span::raw("  ")
+    }];
     let metadata = metadata_spans(entry, columns, now);
 
     if position == MetadataPosition::Left {
@@ -186,7 +191,7 @@ mod tests {
     fn default_side_puts_name_before_metadata() {
         let file = sample("Cargo.toml");
         let line = plain(entry_line(
-            &file, false, Columns::Full, MetadataPosition::Right, 20, 120,
+            &file, false, false, Columns::Full, MetadataPosition::Right, 20, 120,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.find("Cargo.toml").unwrap() < line.find("-rw-r--r--").unwrap());
@@ -196,7 +201,7 @@ mod tests {
     fn legacy_side_puts_metadata_before_name() {
         let file = sample("Cargo.toml");
         let line = plain(entry_line(
-            &file, false, Columns::Full, MetadataPosition::Left, 20, 120,
+            &file, false, false, Columns::Full, MetadataPosition::Left, 20, 120,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.find("-rw-r--r--").unwrap() < line.find("Cargo.toml").unwrap());
@@ -208,11 +213,11 @@ mod tests {
         let b = sample("a-much-longer-file.txt");
         let max_width = maximum_name_width(&[sample("a"), sample("a-much-longer-file.txt")]);
         let first = plain(entry_line(
-            &a, false, Columns::Full, MetadataPosition::Right, max_width, 120,
+            &a, false, false, Columns::Full, MetadataPosition::Right, max_width, 120,
             SystemTime::UNIX_EPOCH,
         ));
         let second = plain(entry_line(
-            &b, false, Columns::Full, MetadataPosition::Right, max_width, 120,
+            &b, false, false, Columns::Full, MetadataPosition::Right, max_width, 120,
             SystemTime::UNIX_EPOCH,
         ));
         assert_eq!(first.find("-rw-r--r--"), second.find("-rw-r--r--"));
@@ -222,7 +227,7 @@ mod tests {
     fn narrow_terminals_do_not_render_metadata() {
         let file = sample("Cargo.toml");
         let line = plain(entry_line(
-            &file, false, Columns::Names, MetadataPosition::Right, 20, 25,
+            &file, false, false, Columns::Names, MetadataPosition::Right, 20, 25,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.contains("Cargo.toml"));
@@ -233,12 +238,24 @@ mod tests {
     fn long_names_truncate_and_keep_metadata_visible() {
         let file = sample("longer-than-our-column-width-filename.rs");
         let line = plain(entry_line(
-            &file, false, Columns::Full, MetadataPosition::Right, 100, 64,
+            &file, false, false, Columns::Full, MetadataPosition::Right, 100, 64,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.contains('…'));
         assert!(line.contains("-rw-r--r--"));
         assert!(UnicodeWidthStr::width(line.as_str()) <= 64);
+    }
+
+    #[test]
+    fn marked_entries_show_checkmark_regardless_of_column_position() {
+        let file = sample("Cargo.toml");
+        for position in [MetadataPosition::Left, MetadataPosition::Right] {
+            let line = plain(entry_line(
+                &file, false, true, Columns::Full, position, 20, 120,
+                SystemTime::UNIX_EPOCH,
+            ));
+            assert!(line.starts_with("✓ "));
+        }
     }
 
     #[test]
