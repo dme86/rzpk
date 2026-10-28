@@ -1032,6 +1032,96 @@ mod tests {
     }
 
     #[test]
+    fn preview_command_opens_and_closes_independent_of_split() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('p'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.preview_mode);
+        assert_eq!(app.preview.as_ref().unwrap().title, "alpha");
+
+        app.toggle_vertical_split()?;
+        assert!(app.preview_mode);
+        assert_eq!(app.other.as_ref().unwrap().preview.as_ref().unwrap().title, "alpha");
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.preview.as_ref().unwrap().title, "beta");
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.preview.as_ref().unwrap().title, "alpha");
+
+        // Preview can be disabled while keeping both independent panes.
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('p'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.preview_mode);
+        assert!(app.other.is_some());
+        assert!(app.preview.is_none());
+        assert!(app.other.as_ref().unwrap().preview.is_none());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn preview_updates_on_search_and_directory_navigation() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_preview();
+        app.handle_key(key(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(app.preview.as_ref().unwrap().title, "beta");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("beta"));
+        assert!(app.preview.is_none());
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        assert_eq!(app.preview.as_ref().unwrap().title, "beta");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn normal_command_resets_both_modes_without_quitting() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.toggle_preview();
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.active_right);
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.running);
+        assert!(app.other.is_none());
+        assert!(!app.preview_mode);
+        assert!(app.preview.is_none());
+        assert!(!app.active_right);
+        assert_eq!(app.cwd, root);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn esc_clears_marks_but_does_not_reset_preview_or_split() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.toggle_preview();
+        app.handle_key(key(KeyCode::Char(' '), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 0);
+        assert!(app.preview_mode);
+        assert!(app.other.is_some());
+        assert!(app.running);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
