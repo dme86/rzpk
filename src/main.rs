@@ -7,13 +7,15 @@ use std::{
 mod config;
 mod details;
 mod pane;
+mod preview;
 mod render;
 mod selection;
 
 use config::{Config, MetadataPosition};
 use details::permissions;
 use render::maximum_name_width;
-use pane::{PaneState, PaneView, draw_entries, draw_split_pane, use_two_columns};
+use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_columns};
+use preview::Preview;
 use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -134,6 +136,8 @@ struct App {
     last_typed: Option<Instant>,
     error: Option<String>,
     running: bool,
+    preview_mode: bool,
+    preview: Option<Preview>,
     other: Option<PaneState>,
     active_right: bool,
 }
@@ -157,6 +161,8 @@ impl App {
             last_typed: None,
             error: None,
             running: true,
+            preview_mode: false,
+            preview: None,
             other: None,
             active_right: false,
         })
@@ -175,6 +181,7 @@ impl App {
         self.scroll = 0;
         self.clear_typed();
         self.error = None;
+        self.refresh_active_preview();
         Ok(())
     }
 
@@ -229,6 +236,7 @@ impl App {
         if let Some(index) = self.find_match(&prefix) {
             self.selection.commit();
             self.selected = index;
+            self.refresh_active_preview();
             self.typed = prefix;
         } else {
             // If the longer prefix has no match, treat the last key as a new search.
@@ -236,6 +244,7 @@ impl App {
             if let Some(index) = self.find_match(&single) {
                 self.selection.commit();
                 self.selected = index;
+                self.refresh_active_preview();
                 self.typed = single;
             } else {
                 self.typed.clear();
@@ -260,7 +269,10 @@ impl App {
         } else {
             self.selection.commit();
         }
-        self.selected = next;
+        if self.selected != next {
+            self.selected = next;
+            self.refresh_active_preview();
+        }
         self.clear_typed();
     }
 
@@ -286,6 +298,7 @@ impl App {
         std::mem::swap(&mut self.typed, &mut other.typed);
         std::mem::swap(&mut self.last_typed, &mut other.last_typed);
         std::mem::swap(&mut self.error, &mut other.error);
+        std::mem::swap(&mut self.preview, &mut other.preview);
         self.active_right = !self.active_right;
     }
 
@@ -300,10 +313,45 @@ impl App {
         } else {
             // Open the right pane in the same folder, but with independent
             // cursor, selection, search, scroll and navigation.
-            self.other = Some(PaneState::open(&self.cwd)?);
+            let mut right = PaneState::open(&self.cwd)?;
+            if self.preview_mode {
+                right.refresh_preview();
+            }
+            self.other = Some(right);
             self.active_right = false;
         }
         Ok(())
+    }
+
+    fn refresh_active_preview(&mut self) {
+        if self.preview_mode {
+            self.preview = Preview::selected(&self.entries, self.selected);
+        }
+    }
+
+    fn toggle_preview(&mut self) {
+        self.preview_mode = !self.preview_mode;
+        if self.preview_mode {
+            self.refresh_active_preview();
+            if let Some(other) = self.other.as_mut() {
+                other.refresh_preview();
+            }
+        } else {
+            self.preview = None;
+            if let Some(other) = self.other.as_mut() {
+                other.preview = None;
+            }
+        }
+    }
+
+    fn normal_mode(&mut self) {
+        if self.active_right {
+            self.switch_pane();
+        }
+        self.other = None;
+        self.active_right = false;
+        self.preview_mode = false;
+        self.preview = None;
     }
 
     fn handle_command_key(&mut self, key: KeyEvent) {
@@ -321,6 +369,8 @@ impl App {
                             self.error = Some(error.to_string());
                         }
                     }
+                    "p" => self.toggle_preview(),
+                    "n" => self.normal_mode(),
                     _ => self.error = Some(format!("unknown command: :{command}")),
                 }
             }
@@ -411,8 +461,16 @@ impl App {
         if split {
             title.push(Span::styled(
                 "[v]",
-                Style::default().fg(Color::Rgb(93, 203, 165)),
+                Style::default().fg(Color::Rgb(131, 165, 152)), // Gruvbox blue
             ));
+        }
+        if self.preview_mode {
+            title.push(Span::styled(
+                if split { " [p]" } else { "[p]" },
+                Style::default().fg(Color::Rgb(250, 189, 47)), // Gruvbox yellow
+            ));
+        }
+        if split {
             title.push(Span::styled(
                 "  Tab: switch",
                 Style::default().fg(Color::DarkGray),
@@ -469,16 +527,17 @@ impl App {
             scroll: &mut self.scroll,
             typed: &self.typed,
             error: self.error.as_deref(),
+            preview: self.preview.as_ref(),
         };
 
         let Some(other) = self.other.as_mut() else {
-            draw_entries(frame, content, &mut current, self.metadata_position, true);
+            draw_pane_content(frame, content, &mut current, self.metadata_position, true, self.preview_mode);
             return;
         };
         let mut inactive = other.view();
 
         if !use_two_columns(area.width) {
-            draw_split_pane(frame, content, &mut current, self.metadata_position, true);
+            draw_split_pane(frame, content, &mut current, self.metadata_position, true, self.preview_mode);
             return;
         }
 
@@ -503,11 +562,11 @@ impl App {
         // `current` is always the active pane; swapping it on Tab preserves
         // the left/right coordinates independently from each pane's state.
         if self.active_right {
-            draw_split_pane(frame, left, &mut inactive, self.metadata_position, false);
-            draw_split_pane(frame, right, &mut current, self.metadata_position, true);
+            draw_split_pane(frame, left, &mut inactive, self.metadata_position, false, self.preview_mode);
+            draw_split_pane(frame, right, &mut current, self.metadata_position, true, self.preview_mode);
         } else {
-            draw_split_pane(frame, left, &mut current, self.metadata_position, true);
-            draw_split_pane(frame, right, &mut inactive, self.metadata_position, false);
+            draw_split_pane(frame, left, &mut current, self.metadata_position, true, self.preview_mode);
+            draw_split_pane(frame, right, &mut inactive, self.metadata_position, false, self.preview_mode);
         }
     }
 
@@ -586,6 +645,8 @@ mod tests {
             last_typed: None,
             error: None,
             running: true,
+            preview_mode: false,
+            preview: None,
             other: None,
             active_right: false,
         }
