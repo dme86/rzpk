@@ -10,6 +10,7 @@ mod pane;
 mod preview;
 mod render;
 mod selection;
+mod tree;
 
 use config::{Config, MetadataPosition};
 use details::permissions;
@@ -92,34 +93,38 @@ impl Entry {
     }
 }
 
-fn read_directory(path: &Path) -> io::Result<Vec<Entry>> {
-    let mut entries = Vec::new();
-    for item in fs::read_dir(path)? {
-        let item = item?;
-        let file_type = item.file_type()?;
-        let path = item.path();
-        let name = item.file_name().to_string_lossy().into_owned();
-        // Use symlink metadata, not the target's permissions/size.
-        let metadata = fs::symlink_metadata(&path).ok();
-        entries.push(Entry {
-            name_key: name.to_lowercase(),
-            name,
-            is_dir: file_type.is_dir() || (file_type.is_symlink() && path.is_dir()),
-            is_symlink: file_type.is_symlink(),
-            permissions: permissions(metadata.as_ref()),
-            size: metadata.as_ref().map(fs::Metadata::len),
-            modified: metadata.as_ref().and_then(|metadata| metadata.modified().ok()),
-            path,
-        });
-    }
+fn directory_entry(item: fs::DirEntry) -> io::Result<Entry> {
+    let file_type = item.file_type()?;
+    let path = item.path();
+    let name = item.file_name().to_string_lossy().into_owned();
+    let metadata = fs::symlink_metadata(&path).ok();
+    Ok(Entry {
+        name_key: name.to_lowercase(),
+        name,
+        is_dir: file_type.is_dir() || (file_type.is_symlink() && path.is_dir()),
+        is_symlink: file_type.is_symlink(),
+        permissions: permissions(metadata.as_ref()),
+        size: metadata.as_ref().map(fs::Metadata::len),
+        modified: metadata.as_ref().and_then(|metadata| metadata.modified().ok()),
+        path,
+    })
+}
 
-    // Like a typical file explorer: folders first, then files, both alphabetically.
+fn sort_entries(entries: &mut [Entry]) {
     entries.sort_by(|a, b| {
         b.is_dir
             .cmp(&a.is_dir)
             .then_with(|| a.name_key.cmp(&b.name_key))
             .then_with(|| a.name.cmp(&b.name))
     });
+}
+
+fn read_directory(path: &Path) -> io::Result<Vec<Entry>> {
+    let mut entries = Vec::new();
+    for item in fs::read_dir(path)? {
+        entries.push(directory_entry(item?)?);
+    }
+    sort_entries(&mut entries);
     Ok(entries)
 }
 
