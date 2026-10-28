@@ -117,10 +117,10 @@ pub const COMMANDS: &[Command] = &[
 
 pub fn action_for(key: KeyEvent) -> Option<Action> {
     let action = BINDINGS.iter().find(|binding| binding.input.matches(key))?.action;
-    if action == Action::Jump(0) {
-        if let KeyCode::Char(ch) = key.code {
-            return ch.to_digit(10).map(|slot| Action::Jump(slot as u8));
-        }
+    if action == Action::Jump(0)
+        && let KeyCode::Char(ch) = key.code
+    {
+        return ch.to_digit(10).map(|slot| Action::Jump(slot as u8));
     }
     Some(action)
 }
