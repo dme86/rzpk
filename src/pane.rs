@@ -28,6 +28,7 @@ pub struct PaneState {
     pub entries: Vec<Entry>,
     pub max_name_width: usize,
     pub selected: usize,
+    pub parent_focused: bool,
     pub selection: Selection,
     pub scroll: usize,
     pub typed: String,
@@ -52,6 +53,7 @@ impl PaneState {
             entries,
             max_name_width,
             selected: 0,
+            parent_focused: false,
             selection: Selection::default(),
             scroll: 0,
             typed: String::new(),
@@ -68,6 +70,7 @@ impl PaneState {
             entries: &self.entries,
             max_name_width: self.max_name_width,
             selected: self.selected,
+            parent_focused: self.parent_focused,
             selection: &self.selection,
             scroll: &mut self.scroll,
             typed: &self.typed,
@@ -121,7 +124,7 @@ impl PaneState {
     }
 
     pub fn refresh_preview(&mut self) {
-        self.preview = if self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
+        self.preview = if !self.parent_focused && self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
             Preview::selected(&self.entries, self.selected)
         } else {
             None
@@ -144,6 +147,7 @@ pub struct PaneView<'a> {
     pub entries: &'a [Entry],
     pub max_name_width: usize,
     pub selected: usize,
+    pub parent_focused: bool,
     pub selection: &'a Selection,
     pub scroll: &'a mut usize,
     pub typed: &'a str,
@@ -202,22 +206,47 @@ pub fn draw_entries(
         return;
     }
 
+    // The parent row is virtual and pinned to the top: it never participates
+    // in marks, fuzzy search, tree pagination, or filesystem operations.
+    let has_parent = view.cwd.parent().is_some();
+    let mut listing = area;
+    if has_parent {
+        let selected = active && view.parent_focused;
+        let background = if selected {
+            Style::default().bg(Color::Rgb(36, 51, 69))
+        } else {
+            Style::default()
+        };
+        let marker = if selected { "▸ " } else { "  " };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(Color::Rgb(184, 187, 38))),
+                Span::styled("[..]", Style::default().fg(Color::Rgb(131, 165, 152))),
+            ])).style(background),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+        listing.y = listing.y.saturating_add(1);
+        listing.height = listing.height.saturating_sub(1);
+    }
+    if listing.height == 0 || listing.width == 0 {
+        return;
+    }
     if view.entries.is_empty() {
         frame.render_widget(
             Paragraph::new("  (empty directory)").style(Style::default().fg(Color::DarkGray)),
-            area,
+            listing,
         );
         return;
     }
 
-    let height = usize::from(area.height);
+    let height = usize::from(listing.height);
     if view.selected < *view.scroll {
         *view.scroll = view.selected;
     } else if view.selected >= view.scroll.saturating_add(height) {
         *view.scroll = view.selected + 1 - height;
     }
 
-    let columns = Columns::for_width(area.width);
+    let columns = Columns::for_width(listing.width);
     let now = SystemTime::now();
     for (row, entry) in view
         .entries
@@ -227,7 +256,7 @@ pub fn draw_entries(
         .enumerate()
     {
         let index = *view.scroll + row;
-        let focused = active && index == view.selected;
+        let focused = active && !view.parent_focused && index == view.selected;
         let marked = view.selection.contains(index);
         let background = match (focused, marked) {
             (true, true) => Style::default().bg(Color::Rgb(37, 75, 65)),
@@ -241,7 +270,7 @@ pub fn draw_entries(
             if view.tree_rows.is_some() { Columns::Names } else { columns },
             metadata_position,
             view.max_name_width,
-            area.width,
+            listing.width,
             now,
         );
         if let Some(tree_row) = view.tree_rows.and_then(|rows| rows.get(index)) {
@@ -272,7 +301,7 @@ pub fn draw_entries(
         }
         frame.render_widget(
             Paragraph::new(line).style(background),
-            Rect::new(area.x, area.y + row as u16, area.width, 1),
+            Rect::new(listing.x, listing.y + row as u16, listing.width, 1),
         );
     }
 }
