@@ -72,6 +72,7 @@ pub struct TrackedReader<R> {
 }
 
 impl<R> TrackedReader<R> {
+    #[cfg(test)]
     pub fn new(inner: R, progress: &Arc<Progress>) -> Self {
         Self::optional(inner, Some(progress))
     }
