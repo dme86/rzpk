@@ -86,7 +86,15 @@ impl Transfer {
             if !meta.is_dir() && !meta.is_file() && !meta.file_type().is_symlink() {
                 return Err(invalid(format!("Unsupported file type: {}", source.display())));
             }
-            let canonical_source = fs::canonicalize(&source)?;
+            // Don't resolve the final component of a symlink: dangling links
+            // are valid filesystem entries and should still be transferable.
+            let canonical_source = if meta.file_type().is_symlink() {
+                let parent = source.parent().ok_or_else(|| invalid("Source has no parent"))?;
+                let name = source.file_name().ok_or_else(|| invalid("Source has no filename"))?;
+                fs::canonicalize(parent)?.join(name)
+            } else {
+                fs::canonicalize(&source)?
+            };
             if canonical_roots.iter().any(|root| canonical_source.starts_with(root)) {
                 continue;
             }
@@ -129,9 +137,17 @@ impl Transfer {
         let mut completed = 0;
         for source in &checked.sources {
             let target = target_path(source, &checked.destination)?;
-            copy_item(source, &target)?;
+            let meta = fs::symlink_metadata(source)?;
+            // A same-volume regular-file move can be instantaneous: creating
+            // a hard link is exclusive and cannot overwrite an existing file.
+            // Cross-volume moves fall back to the safe copy-then-delete path.
+            let linked = checked.kind == TransferKind::Move
+                && meta.is_file()
+                && fs::hard_link(source, &target).is_ok();
+            if !linked {
+                copy_item(source, &target)?;
+            }
             if checked.kind == TransferKind::Move {
-                let meta = fs::symlink_metadata(source)?;
                 if meta.is_dir() {
                     fs::remove_dir_all(source)?;
                 } else {
@@ -326,6 +342,37 @@ mod tests {
         let dest = root.join("right/link.txt");
         assert!(fs::symlink_metadata(&dest)?.file_type().is_symlink());
         assert_eq!(fs::read_link(&dest)?, PathBuf::from("original.txt"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlinks_can_be_copied_without_following_them() -> io::Result<()> {
+        use std::os::unix::fs::symlink;
+        let root = fixture();
+        let source = root.join("left/missing.txt");
+        symlink("missing-target.txt", &source)?;
+        Transfer::new(TransferKind::Copy, vec![source], root.join("right"))?.execute()?;
+        assert_eq!(
+            fs::read_link(root.join("right/missing.txt"))?,
+            PathBuf::from("missing-target.txt")
+        );
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn no_overwrite_even_if_a_target_appears_after_confirmation() -> io::Result<()> {
+        let root = fixture();
+        let source = root.join("left/hello.txt");
+        fs::write(&source, "source")?;
+        let transfer = Transfer::new(TransferKind::Move, vec![source.clone()], root.join("right"))?;
+        fs::write(root.join("right/hello.txt"), "new target")?;
+        let err = transfer.execute().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(root.join("right/hello.txt"))?, "new target");
+        assert_eq!(fs::read_to_string(source)?, "source");
         fs::remove_dir_all(root)?;
         Ok(())
     }
