@@ -64,11 +64,13 @@ In split view (`:v`), the **active pane is the source** and the other pane's **c
 
 A confirmation dialog shows the source and destination. Press **Enter** to execute or **Esc** to cancel without losing marks. Existing targets never get silently overwritten: the operation is rejected before confirmation. Subdirectories and symlinks are copied without following symlinks, and selecting both a parent folder and a child transfers the parent only once.
 
-The ordinary lowercase `c` and `m` still start or refine the incremental search. In tree mode, the destination is the *other pane's current root directory*, not a highlighted subtree. Copy and move operations run in a background worker. A permanent footer shows a live spinner, a progress bar for completed source items and transferred data. The file browser stays usable while an operation is in progress. Only one filesystem job can run at a time; quitting is deferred until it finishes. A failed multi-item operation can leave earlier completed items in place and reports an error.
+The ordinary lowercase `c` and `m` still start or refine the incremental search. In tree mode, the destination is the *other pane's current root directory*, not a highlighted subtree. Copy and move operations run in a background worker. The permanent footer shows a live spinner, a progress bar for completed items and transferred data, plus a separate **waiting queue** strip when jobs are pending. You can confirm up to 64 additional jobs while another runs; they execute **sequentially, FIFO**. Each job captures its source and destination paths when confirmed, so later pane navigation does not change its meaning. rzpk stays usable while the queue runs, but quitting is blocked until all jobs have finished or been removed. A failed job does not stop later independent jobs. Earlier completed items from a failed multi-item transfer may remain in place.
 
 ## Footer and progress
 
-rzpk reserves a single terminal row at the bottom for contextual help, success/error feedback, and background file jobs. During copy, move, archive creation, or extraction it displays an animated activity indicator, elapsed time, processed data and a progress bar when a meaningful total is available. The footer remains visible with `:v`, `:p`, and `:t` enabled, without covering directory entries. Navigation, selection and search still work during a job, but a second transfer or archive operation is rejected until the first completes.
+rzpk reserves a persistent terminal row at the bottom for contextual help, success/error feedback, and active file jobs. When jobs are waiting, a **second row** appears with the queue length, the next jobs and a `:jobs` hint. The active row shows an animated spinner, elapsed time, processed bytes and a progress bar when a meaningful total is available. This footer works with `:v`, `:p` and `:t` without covering directory entries.
+
+Confirm copy, move, pack or extract actions as usual during another job to **enqueue** them. `:jobs` or **Shift+Q** opens the queue window: `↑`/`↓` selects a waiting job, `Delete` (or `Backspace`) removes it without touching the active worker, and `Esc` closes the window. There is a limit of 64 waiting jobs. Queued paths are captured at confirmation; if the filesystem changes before a job starts (for example, the target already exists), that job fails safely and the next job proceeds. There is no concurrent file I/O from multiple rzpk workers, no overwrite of existing targets and no mid-transfer cancellation of the active job.
 
 ## Built-in help
 
@@ -81,7 +83,7 @@ Press **`?`** anywhere during normal navigation to open the scrollable help wind
 - `:archive` and `:extract` work too, without needing function keys.
 - Supported extraction: `.zip`, `.tar`, `.tar.gz` / `.tgz`, `.tar.xz`, `.tar.bz2` (format detected by file signature wherever possible). Other types such as `.7z` are not yet supported.
 
-Both actions require confirmation with **Enter**; **Esc** cancels. Existing target files/folders are never overwritten. Extraction rejects unsafe paths, symlinks, special filesystem entries, or archives exceeding 20,000 entries / 2 GiB uncompressed. Failures remove the newly created extraction folder. Archive operations run in the same background worker as transfers. The footer shows an animated spinner, processed data and an item progress bar when the count is known (packing selected items or extracting ZIP entries). For streaming TAR extraction, the total member count is unknown until completion, so rzpk deliberately shows activity and processed bytes instead of an invented percentage. The worker cannot be canceled after confirmation; finish the operation before quitting rzpk.
+Both actions require confirmation with **Enter**; **Esc** cancels. Existing target files/folders are never overwritten. Extraction rejects unsafe paths, symlinks, special filesystem entries, or archives exceeding 20,000 entries / 2 GiB uncompressed. Failures remove the newly created extraction folder. Archive operations run in the same background worker as transfers. The footer shows an animated spinner, processed data and an item progress bar when the count is known (packing selected items or extracting ZIP entries). For streaming TAR extraction, the total member count is unknown until completion, so rzpk deliberately shows activity and processed bytes instead of an invented percentage. Running work cannot currently be canceled, but waiting archive jobs can be removed from the queue before they begin.
 
 ## Keys
 
@@ -95,6 +97,7 @@ Both actions require confirmation with **Enter**; **Esc** cancels. Existing targ
 | `Shift+A` | Create .tar.gz from marks (or the focused entry) |
 | `Shift+E` | Extract selected archive into a new folder |
 | `?` | Show the scrollable help popup; Esc closes it |
+| `Shift+Q` / `:jobs` | View the queued file operations; Delete removes a waiting job |
 | `Shift+M` | Move marks (or focused item) to the other split pane, after confirmation |
 | `Space` | Same toggle, for terminals that cannot distinguish Shift+Space |
 | `Type letters` | Jump to filenames by prefix, then substring (case-insensitive) |
