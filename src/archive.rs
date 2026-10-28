@@ -3,7 +3,7 @@
 use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, ErrorKind, Read, Write},
+    io::{self, ErrorKind, Read},
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -283,7 +283,7 @@ fn extract_zip(source: &Path, root: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::Write;
     fn fixture() -> PathBuf {
         let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("rzpk-archive-{}-{id}", std::process::id()));
