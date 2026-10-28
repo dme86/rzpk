@@ -859,10 +859,84 @@ impl App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
-        let area = frame.area();
-        self.help_view_height = area.height;
+    fn footer_line(&self) -> Line<'static> {
+        let subdued = Style::default().fg(Color::Rgb(146, 131, 116));
+        let bright = Style::default().fg(Color::Rgb(235, 219, 178));
+        if let Some(job) = &self.job {
+            let snapshot = job.progress.snapshot();
+            let frames = ["◐", "◓", "◑", "◒"];
+            let tick = (job.elapsed().as_millis() / 130) as usize % frames.len();
+            let mut spans = vec![
+                Span::styled(format!("  {} {}  ", frames[tick], job.label), Style::default().fg(Color::Rgb(250, 189, 47))),
+            ];
+            if let Some(percent) = snapshot.percent() {
+                let filled = (percent as usize * 12 / 100).min(12);
+                let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(12 - filled));
+                spans.push(Span::styled(bar, Style::default().fg(Color::Rgb(184, 187, 38))));
+                spans.push(Span::styled(
+                    format!(" {percent:>3}%  {}/{} items", snapshot.items, snapshot.total),
+                    bright,
+                ));
+            } else if snapshot.items > 0 {
+                spans.push(Span::styled(format!("{} entries", snapshot.items), bright));
+            } else {
+                spans.push(Span::styled("working…", subdued));
+            }
+            if snapshot.bytes > 0 {
+                let amount = if snapshot.bytes >= 1_048_576 {
+                    format!("{:.1} MiB", snapshot.bytes as f64 / 1_048_576.0)
+                } else {
+                    format!("{:.1} KiB", snapshot.bytes as f64 / 1024.0)
+                };
+                spans.push(Span::styled(format!("  ·  {amount} processed"), subdued));
+            }
+            spans.push(Span::styled(format!("  ·  {}s", job.elapsed().as_secs()), subdued));
+            return Line::from(spans);
+        }
+        if let Some(error) = &self.error {
+            return Line::from(vec![
+                Span::styled("  ✕ ", Style::default().fg(Color::Rgb(251, 73, 52))),
+                Span::styled(error.clone(), Style::default().fg(Color::Rgb(251, 73, 52))),
+                Span::styled("   ·   ? help", subdued),
+            ]);
+        }
+        if let Some(status) = &self.status {
+            return Line::from(vec![
+                Span::styled("  ✓ ", Style::default().fg(Color::Rgb(184, 187, 38))),
+                Span::styled(status.clone(), bright),
+                Span::styled("   ·   ? help", subdued),
+            ]);
+        }
+        Line::from(vec![
+            Span::styled("  ? help", Style::default().fg(Color::Rgb(250, 189, 47))),
+            Span::styled("   : commands   ·   Shift+C copy   Shift+M move   Shift+A pack   Shift+E extract", subdued),
+        ])
+    }
+
+    fn draw_footer(&self, frame: &mut Frame, area: Rect) {
         if area.height == 0 || area.width == 0 {
+            return;
+        }
+        frame.render_widget(
+            Paragraph::new(self.footer_line()).style(Style::default().bg(Color::Rgb(40, 40, 40))),
+            area,
+        );
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        let screen = frame.area();
+        self.help_view_height = screen.height;
+        if screen.height == 0 || screen.width == 0 {
+            return;
+        }
+        self.draw_footer(frame, Rect::new(
+            screen.x,
+            screen.y + screen.height - 1,
+            screen.width,
+            1,
+        ));
+        let area = Rect::new(screen.x, screen.y, screen.width, screen.height - 1);
+        if area.height == 0 {
             return;
         }
 
@@ -894,12 +968,6 @@ impl App {
             }
         }
 
-        if let Some(status) = &self.status {
-            title.push(Span::styled(
-                format!("  {status}"),
-                Style::default().fg(Color::Rgb(184, 187, 38)),
-            ));
-        }
         if let Some(command) = &self.command {
             title.push(Span::styled(
                 format!("  :{command}█"),
