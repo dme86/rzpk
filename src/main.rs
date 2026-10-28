@@ -1286,9 +1286,14 @@ mod tests {
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.tree_mode);
         assert!(app.tree.is_some());
-        assert_eq!(app.entries.len(), 3);
+        // The first two levels start open automatically.
+        assert_eq!(app.entries.len(), 4);
         assert_eq!(app.entries[0].name, "alpha");
+        assert_eq!(app.entries[1].name, "nested.txt");
 
+        // Enter now collapses the already expanded branch.
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.entries.len(), 3);
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.entries.len(), 4);
         assert_eq!(app.entries[1].name, "nested.txt");
@@ -1317,18 +1322,19 @@ mod tests {
         app.toggle_preview();
         assert!(app.tree_mode && app.preview_mode);
         assert!(app.other.as_ref().unwrap().tree.is_some());
-        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        // Both independent panes start expanded.
         assert_eq!(app.entries.len(), 4);
+        assert_eq!(app.other.as_ref().unwrap().entries.len(), 4);
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.entries.len(), 3); // collapse only the left pane
 
         app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
         assert!(app.active_right);
-        assert_eq!(app.entries.len(), 3);
-        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(app.entries.len(), 4);
+        assert_eq!(app.entries.len(), 4); // right stays expanded
         app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(app.preview.as_ref().unwrap().title, "child.txt");
         app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
-        assert_eq!(app.entries.len(), 4);
+        assert_eq!(app.entries.len(), 3);
         assert_eq!(app.selected, 0);
         assert_eq!(app.preview.as_ref().unwrap().title, "alpha");
         fs::remove_dir_all(root)?;
