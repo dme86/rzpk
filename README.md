@@ -28,7 +28,7 @@ Set it to `"right"` to switch back. The XDG_CONFIG_HOME environment variable is 
 
 ## Parent navigation and editing
 
-A pinned **`[..]`** entry appears at the top of each directory pane whenever a parent directory exists, even if the folder is empty or tree view is enabled. Press `↑` from the first real entry to focus it, then `Enter` to return to the parent; `←` and `Backspace` always go back directly. The `[..]` entry is a **virtual navigation item**: it cannot be marked, searched, copied, moved, packed, or extracted, and the filesystem root does not show it.
+A pinned **`[..]`** entry appears at the top of each directory pane whenever a parent directory exists, even if the folder is empty or tree view is enabled. Press `↑` from the first real entry **or type `..`** to focus it, then `Enter` to return to the parent; `←` and `Backspace` always go back directly. Typing `..` uses the same incremental-search timeout as ordinary filenames; a single `.` can still match hidden files. The `[..]` entry is a **virtual navigation item**: it cannot be marked, searched, copied, moved, packed, or extracted, and the filesystem root does not show it.
 
 `→` enters the highlighted folder in normal, split, or tree view. `Enter` on a folder enters it in normal mode, and in tree mode it expands/collapses the branch. **`Enter` on a regular file** starts your terminal editor using `$EDITOR` (falling back to `$VISUAL`, then `vi`). Editor commands with arguments, e.g. `EDITOR='nvim -u NONE'`, are supported without running a shell. rzpk temporarily releases the alternate screen/raw mode, waits for the editor to exit, restores the terminal, and refreshes the file listing. Search, marks, and navigation shortcuts are otherwise unchanged.
 
