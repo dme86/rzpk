@@ -2617,6 +2617,82 @@ mod tests {
     }
 
     #[test]
+    fn jumping_changes_only_active_pane_and_keeps_other_state() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(1, root.join("alpha"))?;
+        app.jumps.set(2, root.join("beta"))?;
+        app.toggle_vertical_split()?;
+        app.selection.toggle(1);
+
+        app.handle_key(key(KeyCode::Char('1'), KeyModifiers::ALT));
+        assert_eq!(app.cwd, root.join("alpha"));
+        assert!(app.entries.is_empty());
+        assert_eq!(app.selection.count(), 0);
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        assert_eq!(app.selection.count(), 0);
+        app.handle_key(key(KeyCode::Char('2'), KeyModifiers::SUPER));
+        assert_eq!(app.cwd, root.join("beta"));
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("alpha"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn jumps_preserve_tree_and_preview_modes() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(3, root.join("alpha"))?;
+        app.toggle_tree()?;
+        app.toggle_preview();
+        app.handle_key(key(KeyCode::Char('3'), KeyModifiers::ALT));
+        assert_eq!(app.cwd, root.join("alpha"));
+        assert!(app.tree.is_some());
+        assert!(app.tree_mode);
+        assert!(app.preview_mode);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn missing_jump_and_deleted_directory_do_not_change_pane() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jump_to_slot(9);
+        assert_eq!(app.cwd, root);
+        assert!(app.error.as_deref().unwrap().contains("not set"));
+        let vanished = root.join("vanished");
+        app.jumps.set(9, vanished)?;
+        app.jump_to_slot(9);
+        assert_eq!(app.cwd, root);
+        assert!(app.error.as_deref().unwrap().contains("Jump 9"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn colon_jump_invocation_does_not_start_search() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(4, root.join("beta"))?;
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        for ch in "j4".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("beta"));
+        assert!(app.typed.is_empty());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
