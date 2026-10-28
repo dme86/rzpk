@@ -78,13 +78,13 @@ impl TreeState {
         let has_more = batch.len() > requested;
         batch.truncate(requested);
         sort_entries(&mut batch);
+        let visible_count = batch.len();
 
         for (idx, entry) in batch.into_iter().enumerate() {
             if entries.len() >= MAX_VISIBLE {
                 break;
             }
-            let has_next = idx + 1 < requested && idx + 1 < requested.min(batch_size_placeholder())
-                || has_more;
+            let has_next = idx + 1 < visible_count || has_more;
             // Parent guides remain visible through expanded descendants.
             let branch = if has_next { "├── " } else { "└── " };
             let prefix = format!("{indent}{branch}");
@@ -166,9 +166,6 @@ fn placeholder(path: PathBuf, name: &str) -> Entry {
         modified: None,
     }
 }
-
-// Placeholder used only to force an explicit count below; replaced in first edit.
-fn batch_size_placeholder() -> usize { usize::MAX }
 
 #[cfg(test)]
 mod tests {
