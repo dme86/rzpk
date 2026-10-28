@@ -94,7 +94,7 @@ impl<R: Read> Read for TrackedReader<R> {
 /// Count bytes written by compressors or file copies during a job.
 pub struct TrackedWriter<W> {
     inner: W,
-    progress: Arc<Progress>,
+    progress: Option<Arc<Progress>>,
 }
 
 impl<W> TrackedWriter<W> {
