@@ -1,0 +1,10 @@
+[package]
+name = "rzpk"
+version = "0.1.0"
+edition = "2024"
+description = "A small, keyboard-first terminal file browser"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.30.2"
+crossterm = "0.29.0"
