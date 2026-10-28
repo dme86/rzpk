@@ -2,7 +2,7 @@
 
 A deliberately small, keyboard-first file browser written in Rust.
 
-Opens in the **current working directory** and shows a single, colorized file list with Nerd Font icons. Directories appear before files. The default long view shows **Unix permissions, human-readable sizes, and local modification timestamps**. Dates fade from vivid green (newest) to muted slate (oldest), similar to `lsd`.
+Opens in the **current working directory** and shows a single, colorized file list with Nerd Font icons. Directories appear before files. The default long view shows the **filename first**, followed by **Unix permissions, human-readable sizes, and local modification timestamps**. Dates fade from vivid green (newest) to muted slate (oldest), similar to `lsd`.
 
 ## Run
 
@@ -13,6 +13,18 @@ cargo run --release
 Install with `cargo install --path .`, then run `rzpk` from any directory. For the icons, use a [Nerd Font](https://www.nerdfonts.com/) in your terminal.
 
 On narrower terminals the size, then date, then permission columns disappear automatically, leaving the file names visible.
+
+## Metadata alignment
+
+The default is `right`: icon + filename, then permissions, size and date. Metadata columns line up across files, even with names of different lengths.
+
+To use the previous, metadata-first layout, create `~/.config/rzpk/config.toml`:
+
+```toml
+metadata_position = "left"
+```
+
+Set it to `"right"` to switch back. The XDG_CONFIG_HOME environment variable is supported. No config file is required for the default. Restart rzpk after changing it.
 
 ## Keys
 
