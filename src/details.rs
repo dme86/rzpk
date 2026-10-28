@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(unix_permissions('-', 0o644), "-rw-r--r--");
         assert_eq!(unix_permissions('-', 0o4755), "-rwsr-xr-x");
         assert_eq!(unix_permissions('d', 0o1777), "drwxrwxrwt");
-        assert_eq!(unix_permissions('-', 0o6000), "-rwS--S---");
+        assert_eq!(unix_permissions('-', 0o6600), "-rwS--S---");
     }
 
     #[test]
