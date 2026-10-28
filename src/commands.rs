@@ -77,6 +77,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "←", description: "Go to parent folder", action: Action::Parent, input: Input::Plain(KeyCode::Left), section: "NAVIGATION" },
     Binding { label: "→", description: "Enter focused folder", action: Action::EnterDirectory, input: Input::Plain(KeyCode::Right), section: "NAVIGATION" },
     Binding { label: "Type", description: "Search filename (prefix / substring)", action: Action::Command, input: Input::Plain(KeyCode::Null), section: "NAVIGATION" },
+    Binding { label: "Alt/Cmd+1..9", description: "Jump to saved directory in active pane", action: Action::Jump(0), input: Input::JumpDigit, section: "NAVIGATION" },
     Binding { label: "Shift+Up", description: "Extend selection upward", action: Action::MarkUp, input: Input::Shift(KeyCode::Up), section: "SELECTION" },
     Binding { label: "Shift+Down", description: "Extend selection downward", action: Action::MarkDown, input: Input::Shift(KeyCode::Down), section: "SELECTION" },
     Binding { label: "Shift+J", description: "Extend selection downward", action: Action::MarkDown, input: Input::ShiftLetter('j'), section: "SELECTION" },
@@ -87,7 +88,6 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "Shift+A", description: "Create a .tar.gz archive", action: Action::Archive, input: Input::ShiftLetter('a'), section: "FILES" },
     Binding { label: "Shift+E", description: "Extract the selected archive", action: Action::Extract, input: Input::ShiftLetter('e'), section: "FILES" },
     Binding { label: "Shift+Q", description: "Open the job queue (Del removes waiting jobs)", action: Action::Jobs, input: Input::ShiftLetter('q'), section: "FILES" },
-    Binding { label: "Alt/Cmd+1..9", description: "Jump to saved directory in active pane", action: Action::Jump(0), input: Input::JumpDigit, section: "NAVIGATION" },
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
