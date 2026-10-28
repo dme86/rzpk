@@ -1,6 +1,6 @@
 //! Persistent nine-slot directory jumps and compact per-pane hints.
 //! Paths live in [jumps] in the user's regular config.toml.
-use std::{collections::BTreeMap, env, fs, io, path::{Path, PathBuf}};
+use std::{collections::BTreeMap, env, io, path::{Path, PathBuf}};
 use unicode_width::UnicodeWidthStr;
 
 pub const MAX_SLOT: u8 = 9;
