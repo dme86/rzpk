@@ -149,6 +149,15 @@ impl Transfer {
         let mut completed = 0;
         if let Some(progress) = progress {
             progress.set_total(checked.sources.len());
+            // For regular files, percentage can track bytes rather than merely
+            // counting completed top-level items (which stays at 0% on a large
+            // single file until it finishes).
+            if checked.sources.iter().all(|source| fs::symlink_metadata(source).is_ok_and(|m| m.is_file())) {
+                let total = checked.sources.iter().try_fold(0u64, |sum, source| {
+                    Ok::<_, io::Error>(sum.saturating_add(fs::symlink_metadata(source)?.len()))
+                })?;
+                progress.set_total_bytes(total);
+            }
         }
         for source in &checked.sources {
             let target = target_path(source, &checked.destination)?;
@@ -161,6 +170,10 @@ impl Transfer {
                 && fs::hard_link(source, &target).is_ok();
             if !linked {
                 copy_item(source, &target, progress)?;
+            } else if let Some(progress) = progress {
+                // A same-filesystem hardlink is instant, but counts as bytes
+                // transferred for the progress gauge.
+                progress.bytes_done(meta.len());
             }
             if checked.kind == TransferKind::Move {
                 if meta.is_dir() {
