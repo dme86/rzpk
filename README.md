@@ -31,9 +31,9 @@ Set it to `"right"` to switch back. The XDG_CONFIG_HOME environment variable is 
 | Key | Action |
 | --- | --- |
 | `↑` / `↓` | Move the highlight |
-| `Type letters` | Jump to the first filename starting with the typed prefix, ignoring case |
+| `Type letters` | Jump to filenames by prefix, then substring (case-insensitive) |
 | `Enter` | Open the highlighted directory |
 | `Backspace` | Go to the parent directory |
 | `Esc` / `Ctrl+C` | Exit |
 
-Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. After 900 ms of inactivity the prefix resets. There are no file operations, previews, tabs or command modes yet.
+Typing is incremental: `D` jumps to a `d` / `D` entry, then `o` narrows to `Do…`. If no filename starts with the typed text, rzpk searches for it anywhere in the name: typing `vim` can jump to `neovim`. A match at the beginning of a filename always takes priority over a substring match. After 900 ms of inactivity the typed query resets. There are no file operations, previews, tabs or command modes yet.
