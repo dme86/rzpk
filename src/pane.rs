@@ -185,6 +185,31 @@ pub fn draw_entries(
     }
 }
 
+pub fn draw_split_pane(
+    frame: &mut Frame,
+    area: Rect,
+    view: &mut PaneView<'_>,
+    metadata_position: MetadataPosition,
+    active: bool,
+) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    draw_pane_header(
+        frame,
+        Rect::new(area.x, area.y, area.width, 1),
+        view,
+        active,
+    );
+    draw_entries(
+        frame,
+        Rect::new(area.x, area.y.saturating_add(1), area.width, area.height - 1),
+        view,
+        metadata_position,
+        active,
+    );
+}
+
 /// Two panes must be wide enough for both filenames; narrow windows show only
 /// the active pane without destroying its companion's state.
 pub fn use_two_columns(width: u16) -> bool {
