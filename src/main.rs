@@ -1279,6 +1279,88 @@ mod tests {
     }
 
     #[test]
+    fn tree_command_toggles_and_expands_directory() -> io::Result<()> {
+        let root = split_fixture()?;
+        fs::write(root.join("alpha").join("nested.txt"), b"inside")?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('t'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.tree_mode);
+        assert!(app.tree.is_some());
+        assert_eq!(app.entries.len(), 3);
+        assert_eq!(app.entries[0].name, "alpha");
+
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.entries.len(), 4);
+        assert_eq!(app.entries[1].name, "nested.txt");
+        assert_eq!(app.cwd, root);
+
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.selected, 1);
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('t'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.tree_mode);
+        assert!(app.tree.is_none());
+        assert_eq!(app.entries.len(), 3);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn tree_mode_works_per_split_pane_and_with_preview() -> io::Result<()> {
+        let root = split_fixture()?;
+        fs::write(root.join("alpha").join("child.txt"), b"hello")?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.toggle_tree()?;
+        app.toggle_preview();
+        assert!(app.tree_mode && app.preview_mode);
+        assert!(app.other.as_ref().unwrap().tree.is_some());
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.entries.len(), 4);
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.active_right);
+        assert_eq!(app.entries.len(), 3);
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.entries.len(), 4);
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.preview.as_ref().unwrap().title, "child.txt");
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.entries.len(), 4);
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.preview.as_ref().unwrap().title, "alpha");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn normal_command_resets_tree_split_and_preview() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_tree()?;
+        app.toggle_vertical_split()?;
+        app.toggle_preview();
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.other.is_none());
+        assert!(app.tree.is_none());
+        assert!(!app.tree_mode);
+        assert!(!app.preview_mode);
+        assert!(!app.active_right);
+        assert!(app.running);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
