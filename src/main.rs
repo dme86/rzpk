@@ -17,6 +17,7 @@ use details::permissions;
 use render::maximum_name_width;
 use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_columns};
 use preview::Preview;
+use tree::{RowKind, TreeState};
 use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -143,6 +144,8 @@ struct App {
     running: bool,
     preview_mode: bool,
     preview: Option<Preview>,
+    tree_mode: bool,
+    tree: Option<TreeState>,
     other: Option<PaneState>,
     active_right: bool,
 }
@@ -168,20 +171,51 @@ impl App {
             running: true,
             preview_mode: false,
             preview: None,
+            tree_mode: false,
+            tree: None,
             other: None,
             active_right: false,
         })
     }
 
-    fn change_directory(&mut self, cwd: PathBuf, focus: Option<&Path>) -> io::Result<()> {
-        let entries = read_directory(&cwd)?;
-        let selected = focus
-            .and_then(|path| entries.iter().position(|entry| entry.path == path))
-            .unwrap_or(0);
-        self.cwd = cwd;
+    fn replace_visible(&mut self, entries: Vec<Entry>, focus: Option<&Path>, fallback: usize) {
+        let marked = self.entries.iter().enumerate()
+            .filter(|(index, _)| self.selection.contains(*index)
+                && self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
+            .map(|(_, entry)| entry.path.clone())
+            .collect::<Vec<_>>();
         self.max_name_width = maximum_name_width(&entries);
+        self.selected = focus
+            .and_then(|path| entries.iter().position(|entry| entry.path == path))
+            .unwrap_or_else(|| fallback.min(entries.len().saturating_sub(1)));
         self.entries = entries;
-        self.selected = selected;
+        self.selection.clear();
+        for (index, entry) in self.entries.iter().enumerate() {
+            if marked.contains(&entry.path)
+                && self.tree.as_ref().is_none_or(|tree| tree.is_real(index))
+            {
+                self.selection.toggle(index);
+            }
+        }
+        self.scroll = 0;
+        self.clear_typed();
+        self.refresh_active_preview();
+    }
+
+    fn change_directory(&mut self, cwd: PathBuf, focus: Option<&Path>) -> io::Result<()> {
+        let (tree, entries) = if self.tree_mode {
+            let (tree, entries) = TreeState::open(&cwd)?;
+            (Some(tree), entries)
+        } else {
+            (None, read_directory(&cwd)?)
+        };
+        self.cwd = cwd;
+        self.entries = entries;
+        self.max_name_width = maximum_name_width(&self.entries);
+        self.tree = tree;
+        self.selected = focus
+            .and_then(|path| self.entries.iter().position(|entry| entry.path == path))
+            .unwrap_or(0);
         self.selection.clear();
         self.scroll = 0;
         self.clear_typed();
@@ -199,6 +233,31 @@ impl App {
     }
 
     fn open_selected(&mut self) -> io::Result<()> {
+        if let Some(tree) = self.tree.as_mut() {
+            let index = self.selected;
+            let path = self.entries.get(index).map(|entry| entry.path.clone());
+            let action = tree.rows.get(index).map(|row| &row.kind);
+            match action {
+                Some(RowKind::More(_)) => {
+                    let entries = tree.activate(&self.cwd, index)?;
+                    if !entries.is_empty() {
+                        self.replace_visible(entries, None, index);
+                    }
+                    return Ok(());
+                }
+                Some(RowKind::Entry { .. }) => {
+                    if let Some(path) = path
+                        && self.entries[index].is_dir
+                        && !self.entries[index].is_symlink
+                    {
+                        let entries = tree.toggle_directory(&self.cwd, &path)?;
+                        self.replace_visible(entries, Some(&path), index);
+                    }
+                    return Ok(());
+                }
+                _ => return Ok(()),
+            }
+        }
         if let Some(entry) = self.entries.get(self.selected)
             && entry.is_dir
         {
@@ -218,11 +277,15 @@ impl App {
         // query anywhere in the name (e.g. "vim" selects "neovim").
         self.entries
             .iter()
-            .position(|entry| entry.name_key.starts_with(&query))
+            .enumerate()
+            .position(|(index, entry)| self.tree.as_ref().is_none_or(|tree| tree.is_real(index))
+                && entry.name_key.starts_with(&query))
             .or_else(|| {
                 self.entries
                     .iter()
-                    .position(|entry| entry.name_key.contains(&query))
+                    .enumerate()
+                    .position(|(index, entry)| self.tree.as_ref().is_none_or(|tree| tree.is_real(index))
+                        && entry.name_key.contains(&query))
             })
     }
 
@@ -282,7 +345,9 @@ impl App {
     }
 
     fn toggle_current(&mut self) {
-        if !self.entries.is_empty() {
+        if !self.entries.is_empty()
+            && self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected))
+        {
             self.selection.toggle(self.selected);
         }
         self.clear_typed();
@@ -304,6 +369,7 @@ impl App {
         std::mem::swap(&mut self.last_typed, &mut other.last_typed);
         std::mem::swap(&mut self.error, &mut other.error);
         std::mem::swap(&mut self.preview, &mut other.preview);
+        std::mem::swap(&mut self.tree, &mut other.tree);
         self.active_right = !self.active_right;
     }
 
@@ -322,6 +388,9 @@ impl App {
             if self.preview_mode {
                 right.refresh_preview();
             }
+            if self.tree_mode {
+                right.enable_tree()?;
+            }
             self.other = Some(right);
             self.active_right = false;
         }
@@ -330,7 +399,11 @@ impl App {
 
     fn refresh_active_preview(&mut self) {
         if self.preview_mode {
-            self.preview = Preview::selected(&self.entries, self.selected);
+            self.preview = if self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
+                Preview::selected(&self.entries, self.selected)
+            } else {
+                None
+            };
         }
     }
 
@@ -349,6 +422,39 @@ impl App {
         }
     }
 
+    fn toggle_tree(&mut self) -> io::Result<()> {
+        if self.tree_mode {
+            let left_focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+            let left_entries = read_directory(&self.cwd)?;
+            let right_entries = if let Some(other) = self.other.as_ref() {
+                Some(read_directory(&other.cwd)?)
+            } else {
+                None
+            };
+            self.tree_mode = false;
+            self.tree = None;
+            self.replace_visible(left_entries, left_focus.as_deref(), 0);
+            if let (Some(other), Some(entries)) = (self.other.as_mut(), right_entries) {
+                other.disable_tree_with_entries(entries);
+            }
+        } else {
+            let left_focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+            let (tree, entries) = TreeState::open(&self.cwd)?;
+            let right = if let Some(other) = self.other.as_ref() {
+                Some(TreeState::open(&other.cwd)?)
+            } else {
+                None
+            };
+            self.tree_mode = true;
+            self.tree = Some(tree);
+            self.replace_visible(entries, left_focus.as_deref(), 0);
+            if let (Some(other), Some((tree, entries))) = (self.other.as_mut(), right) {
+                other.enable_tree_with_entries(tree, entries);
+            }
+        }
+        Ok(())
+    }
+
     fn normal_mode(&mut self) {
         if self.active_right {
             self.switch_pane();
@@ -357,6 +463,11 @@ impl App {
         self.active_right = false;
         self.preview_mode = false;
         self.preview = None;
+        if self.tree_mode {
+            if let Err(error) = self.toggle_tree() {
+                self.error = Some(error.to_string());
+            }
+        }
     }
 
     fn handle_command_key(&mut self, key: KeyEvent) {
@@ -375,6 +486,11 @@ impl App {
                         }
                     }
                     "p" => self.toggle_preview(),
+                    "t" => {
+                        if let Err(error) = self.toggle_tree() {
+                            self.error = Some(error.to_string());
+                        }
+                    },
                     "n" => self.normal_mode(),
                     _ => self.error = Some(format!("unknown command: :{command}")),
                 }
@@ -533,6 +649,7 @@ impl App {
             typed: &self.typed,
             error: self.error.as_deref(),
             preview: self.preview.as_ref(),
+            tree_rows: self.tree.as_ref().map(|tree| tree.rows.as_slice()),
         };
 
         let Some(other) = self.other.as_mut() else {
@@ -652,6 +769,8 @@ mod tests {
             running: true,
             preview_mode: false,
             preview: None,
+            tree_mode: false,
+            tree: None,
             other: None,
             active_right: false,
         }
