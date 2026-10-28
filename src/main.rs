@@ -3021,6 +3021,78 @@ mod tests {
     }
 
     #[test]
+    fn control_g_then_digit_jumps_without_affecting_search_or_marks() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(1, root.join("alpha"))?;
+        app.selection.toggle(0);
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        assert!(app.jump_prefix_since.is_some());
+        assert_eq!(app.cwd, root);
+        let hint = app.footer_line().spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert!(hint.contains("press 1–9"));
+        app.handle_key(key(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert!(app.jump_prefix_since.is_none());
+        assert_eq!(app.cwd, root.join("alpha"));
+        assert!(app.typed.is_empty());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn portable_jump_prefix_cancels_on_escape_and_invalid_digit() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(1, root.join("alpha"))?;
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.jump_prefix_since.is_none());
+        assert_eq!(app.cwd, root);
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('0'), KeyModifiers::NONE));
+        assert!(app.jump_prefix_since.is_none());
+        assert!(app.error.as_deref().unwrap().contains("1–9"));
+        assert_eq!(app.cwd, root);
+        // Invalid jump selection does not poison regular incremental search.
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE));
+        assert_eq!(app.entries[app.selected].name, "notes.txt");
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn portable_jump_prefix_expires_without_activating_late_digit() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(1, root.join("alpha"))?;
+        app.jump_prefix_since = Some(Instant::now() - JUMP_PREFIX_TIMEOUT - Duration::from_millis(1));
+        app.handle_key(key(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        assert!(app.jump_prefix_since.is_none());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn control_g_jump_affects_only_active_split_pane() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.jumps.set(2, root.join("beta"))?;
+        app.toggle_vertical_split()?;
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("beta"));
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
