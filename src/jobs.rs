@@ -20,6 +20,7 @@ pub struct Progress {
     bytes: AtomicU64,
     items: AtomicU64,
     total: AtomicU64,
+    total_bytes: AtomicU64,
 }
 
 impl Progress {
@@ -28,11 +29,16 @@ impl Progress {
             bytes: AtomicU64::new(0),
             items: AtomicU64::new(0),
             total: AtomicU64::new(0),
+            total_bytes: AtomicU64::new(0),
         }
     }
 
     pub fn set_total(&self, total: usize) {
         self.total.store(total as u64, Ordering::Relaxed);
+    }
+
+    pub fn set_total_bytes(&self, bytes: u64) {
+        self.total_bytes.store(bytes, Ordering::Relaxed);
     }
 
     pub fn item_done(&self) {
@@ -48,6 +54,7 @@ impl Progress {
             bytes: self.bytes.load(Ordering::Relaxed),
             items: self.items.load(Ordering::Relaxed),
             total: self.total.load(Ordering::Relaxed),
+            total_bytes: self.total_bytes.load(Ordering::Relaxed),
         }
     }
 }
@@ -57,11 +64,18 @@ pub struct Snapshot {
     pub bytes: u64,
     pub items: u64,
     pub total: u64,
+    pub total_bytes: u64,
 }
 
 impl Snapshot {
     pub fn percent(self) -> Option<u64> {
-        (self.total > 0).then(|| self.items.min(self.total).saturating_mul(100) / self.total)
+        if self.total_bytes > 0 {
+            Some(self.bytes.min(self.total_bytes).saturating_mul(100) / self.total_bytes)
+        } else if self.total > 0 {
+            Some(self.items.min(self.total).saturating_mul(100) / self.total)
+        } else {
+            None
+        }
     }
 }
 
@@ -209,6 +223,17 @@ mod tests {
         let snapshot = progress.snapshot();
         assert_eq!(snapshot.percent(), Some(20));
         assert_eq!(snapshot.bytes, 4096);
+    }
+
+    #[test]
+    fn byte_progress_takes_priority_over_completed_items() {
+        let progress = Progress::new();
+        progress.set_total(1);
+        progress.set_total_bytes(1000);
+        progress.bytes_done(250);
+        assert_eq!(progress.snapshot().percent(), Some(25));
+        progress.bytes_done(5000);
+        assert_eq!(progress.snapshot().percent(), Some(100));
     }
 
     #[test]
