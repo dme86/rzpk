@@ -6,6 +6,7 @@ use std::{
 
 mod config;
 mod details;
+mod fileops;
 mod pane;
 mod preview;
 mod render;
@@ -14,6 +15,7 @@ mod tree;
 
 use config::{Config, MetadataPosition};
 use details::permissions;
+use fileops::{Transfer, TransferKind};
 use render::maximum_name_width;
 use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_columns};
 use preview::Preview;
@@ -25,7 +27,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 fn mode_indicator(vertical: bool, preview: bool, tree: bool) -> Vec<Span<'static>> {
@@ -174,6 +176,8 @@ struct App {
     tree: Option<TreeState>,
     other: Option<PaneState>,
     active_right: bool,
+    pending_transfer: Option<Transfer>,
+    status: Option<String>,
 }
 
 impl App {
@@ -201,6 +205,8 @@ impl App {
             tree: None,
             other: None,
             active_right: false,
+            pending_transfer: None,
+            status: None,
         })
     }
 
@@ -491,6 +497,114 @@ impl App {
         }
     }
 
+    fn start_transfer(&mut self, kind: TransferKind) {
+        let Some(other) = self.other.as_ref() else {
+            self.error = Some("Open split view (:v) to copy or move files".to_string());
+            return;
+        };
+        let marked = self.selection.count() > 0;
+        let sources = self.entries.iter().enumerate()
+            .filter(|(index, _)| {
+                if marked { self.selection.contains(*index) } else { *index == self.selected }
+            })
+            .filter(|(index, _)| self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
+            .map(|(_, entry)| entry.path.clone())
+            .collect::<Vec<_>>();
+        match Transfer::new(kind, sources, other.cwd.clone()) {
+            Ok(transfer) => {
+                self.pending_transfer = Some(transfer);
+                self.error = None;
+                self.status = None;
+                self.clear_typed();
+            }
+            Err(error) => {
+                self.error = Some(error.to_string());
+                self.status = None;
+            }
+        }
+    }
+
+    fn refresh_after_transfer(&mut self) -> io::Result<()> {
+        let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+        let entries = if let Some(tree) = self.tree.as_mut() {
+            tree.rebuild(&self.cwd)?
+        } else {
+            read_directory(&self.cwd)?
+        };
+        self.replace_visible(entries, focus.as_deref(), self.selected);
+        if let Some(other) = self.other.as_mut() {
+            other.refresh_listing()?;
+        }
+        Ok(())
+    }
+
+    fn handle_transfer_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => { self.pending_transfer = None; }
+            KeyCode::Enter => {
+                if let Some(transfer) = self.pending_transfer.take() {
+                    let kind = transfer.kind;
+                    let result = transfer.execute();
+                    if result.is_ok() {
+                        self.selection.clear();
+                    }
+                    let refreshed = self.refresh_after_transfer();
+                    match (result, refreshed) {
+                        (Ok(count), Ok(())) => {
+                            self.error = None;
+                            self.status = Some(format!("{} {} item(s)", kind.past_tense(), count));
+                        }
+                        (Err(error), _) | (_, Err(error)) => {
+                            self.status = None;
+                            self.error = Some(format!("{} failed: {error}", kind.verb()));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn draw_transfer_dialog(&self, frame: &mut Frame, area: Rect) {
+        let Some(transfer) = self.pending_transfer.as_ref() else {
+            return;
+        };
+        let width = area.width.saturating_sub(2).min(76);
+        let height = area.height.saturating_sub(2).min(9);
+        if width < 10 || height < 4 {
+            return;
+        }
+        let dialog = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
+        let bg = Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Rgb(235, 219, 178));
+        let from = transfer.sources.first()
+            .and_then(|path| path.parent())
+            .unwrap_or(&self.cwd);
+        let lines = vec![
+            Line::from(format!("  {} {} item(s)", transfer.kind.verb(), transfer.sources.len())),
+            Line::from(""),
+            Line::from(format!("  From: {}", from.display())),
+            Line::from(format!("  To:   {}", transfer.destination.display())),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Enter: confirm    Esc: cancel",
+                Style::default().fg(Color::Rgb(184, 187, 38)),
+            )),
+        ];
+        let block = Block::default()
+            .title(format!(" {} confirmation ", transfer.kind.verb()))
+            .title_style(Style::default().fg(Color::Rgb(250, 189, 47)))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(146, 131, 116)))
+            .style(bg);
+        frame.render_widget(Clear, dialog);
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), dialog);
+    }
+
     fn handle_command_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -543,6 +657,11 @@ impl App {
             return;
         }
 
+        if self.pending_transfer.is_some() {
+            self.handle_transfer_key(key);
+            return;
+        }
+
         if self.command.is_some() {
             self.handle_command_key(key);
             return;
@@ -578,6 +697,12 @@ impl App {
             KeyCode::Char('K') if !ctrl && !alt => self.move_cursor(-1, true),
             KeyCode::Char('j') if shift && !ctrl && !alt => self.move_cursor(1, true),
             KeyCode::Char('k') if shift && !ctrl && !alt => self.move_cursor(-1, true),
+            // crossterm reports shifted characters either as uppercase
+            // without modifiers or lowercase with SHIFT, depending on terminal.
+            KeyCode::Char('C') if !ctrl && !alt => self.start_transfer(TransferKind::Copy),
+            KeyCode::Char('c') if shift && !ctrl && !alt => self.start_transfer(TransferKind::Copy),
+            KeyCode::Char('M') if !ctrl && !alt => self.start_transfer(TransferKind::Move),
+            KeyCode::Char('m') if shift && !ctrl && !alt => self.start_transfer(TransferKind::Move),
             // A few terminals report Shift+Space as plain Space. Accept both.
             KeyCode::Char(' ') if !ctrl && !alt => self.toggle_current(),
             // Typed search must never swallow Shift-modified keys.
@@ -620,6 +745,12 @@ impl App {
             }
         }
 
+        if let Some(status) = &self.status {
+            title.push(Span::styled(
+                format!("  {status}"),
+                Style::default().fg(Color::Rgb(184, 187, 38)),
+            ));
+        }
         if let Some(command) = &self.command {
             title.push(Span::styled(
                 format!("  :{command}█"),
@@ -664,12 +795,14 @@ impl App {
 
         let Some(other) = self.other.as_mut() else {
             draw_pane_content(frame, content, &mut current, self.metadata_position, true, self.preview_mode);
+            self.draw_transfer_dialog(frame, area);
             return;
         };
         let mut inactive = other.view();
 
         if !use_two_columns(area.width) {
             draw_split_pane(frame, content, &mut current, self.metadata_position, true, self.preview_mode);
+            self.draw_transfer_dialog(frame, area);
             return;
         }
 
@@ -700,6 +833,7 @@ impl App {
             draw_split_pane(frame, left, &mut current, self.metadata_position, true, self.preview_mode);
             draw_split_pane(frame, right, &mut inactive, self.metadata_position, false, self.preview_mode);
         }
+        self.draw_transfer_dialog(frame, area);
     }
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -783,6 +917,8 @@ mod tests {
             tree: None,
             other: None,
             active_right: false,
+            pending_transfer: None,
+            status: None,
         }
     }
 
