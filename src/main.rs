@@ -653,11 +653,11 @@ impl App {
                 self.queue_selected = (self.queue_selected + 1)
                     .min(self.queue.len().saturating_sub(1));
             }
-            KeyCode::Delete | KeyCode::Backspace => {
-                if self.queue.remove(self.queue_selected).is_some() {
-                    self.status = Some("Removed waiting job from queue".to_owned());
-                    self.queue_selected = self.queue_selected.min(self.queue.len().saturating_sub(1));
-                }
+            KeyCode::Delete | KeyCode::Backspace
+                if self.queue.remove(self.queue_selected).is_some() =>
+            {
+                self.status = Some("Removed waiting job from queue".to_owned());
+                self.queue_selected = self.queue_selected.min(self.queue.len().saturating_sub(1));
             }
             _ => {}
         }
