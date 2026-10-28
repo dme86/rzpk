@@ -106,19 +106,24 @@ fn metadata_spans(entry: &Entry, columns: Columns, now: SystemTime) -> Vec<Span<
     spans
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EntryHighlight {
+    pub focused: bool,
+    pub marked: bool,
+}
+
 pub fn entry_line(
     entry: &Entry,
-    selected: bool,
-    marked: bool,
+    highlight: EntryHighlight,
     columns: Columns,
     position: MetadataPosition,
     max_name_width: usize,
     terminal_width: u16,
     now: SystemTime,
 ) -> Line<'static> {
-    let (icon, icon_color) = entry.icon_and_color(selected);
-    let name_color = if selected { Color::White } else { Color::Gray };
-    let mut spans = vec![if marked {
+    let (icon, icon_color) = entry.icon_and_color(highlight.focused);
+    let name_color = if highlight.focused { Color::White } else { Color::Gray };
+    let mut spans = vec![if highlight.marked {
         Span::styled("✓ ", Style::default().fg(Color::Rgb(91, 205, 160)))
     } else {
         Span::raw("  ")
@@ -191,7 +196,7 @@ mod tests {
     fn default_side_puts_name_before_metadata() {
         let file = sample("Cargo.toml");
         let line = plain(entry_line(
-            &file, false, false, Columns::Full, MetadataPosition::Right, 20, 120,
+            &file, EntryHighlight::default(), Columns::Full, MetadataPosition::Right, 20, 120,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.find("Cargo.toml").unwrap() < line.find("-rw-r--r--").unwrap());
@@ -201,7 +206,7 @@ mod tests {
     fn legacy_side_puts_metadata_before_name() {
         let file = sample("Cargo.toml");
         let line = plain(entry_line(
-            &file, false, false, Columns::Full, MetadataPosition::Left, 20, 120,
+            &file, EntryHighlight::default(), Columns::Full, MetadataPosition::Left, 20, 120,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.find("-rw-r--r--").unwrap() < line.find("Cargo.toml").unwrap());
@@ -213,11 +218,11 @@ mod tests {
         let b = sample("a-much-longer-file.txt");
         let max_width = maximum_name_width(&[sample("a"), sample("a-much-longer-file.txt")]);
         let first = plain(entry_line(
-            &a, false, false, Columns::Full, MetadataPosition::Right, max_width, 120,
+            &a, EntryHighlight::default(), Columns::Full, MetadataPosition::Right, max_width, 120,
             SystemTime::UNIX_EPOCH,
         ));
         let second = plain(entry_line(
-            &b, false, false, Columns::Full, MetadataPosition::Right, max_width, 120,
+            &b, EntryHighlight::default(), Columns::Full, MetadataPosition::Right, max_width, 120,
             SystemTime::UNIX_EPOCH,
         ));
         assert_eq!(first.find("-rw-r--r--"), second.find("-rw-r--r--"));
@@ -227,7 +232,7 @@ mod tests {
     fn narrow_terminals_do_not_render_metadata() {
         let file = sample("Cargo.toml");
         let line = plain(entry_line(
-            &file, false, false, Columns::Names, MetadataPosition::Right, 20, 25,
+            &file, EntryHighlight::default(), Columns::Names, MetadataPosition::Right, 20, 25,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.contains("Cargo.toml"));
@@ -238,7 +243,7 @@ mod tests {
     fn long_names_truncate_and_keep_metadata_visible() {
         let file = sample("longer-than-our-column-width-filename.rs");
         let line = plain(entry_line(
-            &file, false, false, Columns::Full, MetadataPosition::Right, 100, 64,
+            &file, EntryHighlight::default(), Columns::Full, MetadataPosition::Right, 100, 64,
             SystemTime::UNIX_EPOCH,
         ));
         assert!(line.contains('…'));
@@ -251,7 +256,7 @@ mod tests {
         let file = sample("Cargo.toml");
         for position in [MetadataPosition::Left, MetadataPosition::Right] {
             let line = plain(entry_line(
-                &file, false, true, Columns::Full, position, 20, 120,
+                &file, EntryHighlight { focused: false, marked: true }, Columns::Full, position, 20, 120,
                 SystemTime::UNIX_EPOCH,
             ));
             assert!(line.starts_with("✓ "));
