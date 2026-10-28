@@ -78,9 +78,21 @@ impl ArchiveJob {
         }
         let _ = detect_format(&source)?;
         let stem = archive_stem(&source)?;
-        let target = fs::canonicalize(cwd)?.join(stem);
+        let root = fs::canonicalize(cwd)?;
+        let mut target = root.join(&stem);
         if present(&target)? {
-            return Err(io::Error::new(ErrorKind::AlreadyExists, format!("Already exists: {}", target.display())));
+            // Often the original "report.txt" exists beside "report.txt.tar.gz".
+            // Choose a fresh extraction directory instead of overwriting it.
+            target = root.join(format!("{stem}-extracted"));
+            for number in 2..=1000 {
+                if !present(&target)? {
+                    break;
+                }
+                target = root.join(format!("{stem}-extracted-{number}"));
+            }
+            if present(&target)? {
+                return Err(io::Error::new(ErrorKind::AlreadyExists, "No free extraction folder name"));
+            }
         }
         Ok(Self::Unpack { source, target })
     }
@@ -327,6 +339,19 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn extraction_collision_gets_a_fresh_folder_name() -> io::Result<()> {
+        let root = fixture();
+        let source = root.join("report.tar");
+        fs::write(&source, b"")?;
+        fs::create_dir(root.join("report"))?;
+        fs::create_dir(root.join("report-extracted"))?;
+        let unpack = ArchiveJob::new_unpack(source, &root)?;
+        assert_eq!(unpack.target(), root.join("report-extracted-2"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn denies_path_escape_and_overwrite() -> io::Result<()> {
         let root = fixture();
         assert!(safe_member(&root, Path::new("../escape")).is_err());
@@ -334,7 +359,10 @@ mod tests {
         assert!(safe_member(&root, Path::new("..\\evil")).is_err());
         fs::write(root.join("test.tar"), b"")?;
         fs::create_dir(root.join("test"))?;
-        assert!(ArchiveJob::new_unpack(root.join("test.tar"), &root).is_err());
+        assert_eq!(
+            ArchiveJob::new_unpack(root.join("test.tar"), &root)?.target(),
+            root.join("test-extracted")
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }
