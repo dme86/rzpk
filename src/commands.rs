@@ -14,7 +14,7 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Help, Quit, Command, SwitchPane, Parent, EnterDirectory, Open, Up, Down,
-    MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs,
+    MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs, Jump(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -25,6 +25,7 @@ enum Input {
     ShiftLetter(char),
     Literal(char),
     CtrlLetter(char),
+    JumpDigit,
 }
 
 impl Input {
@@ -45,6 +46,9 @@ impl Input {
             },
             Self::Literal(ch) => key.code == KeyCode::Char(ch) && !ctrl && !alt,
             Self::CtrlLetter(ch) => key.code == KeyCode::Char(ch) && ctrl && !alt,
+            Self::JumpDigit => matches!(key.code, KeyCode::Char('1'..='9'))
+                && !ctrl && !shift
+                && (alt || key.modifiers.contains(KeyModifiers::SUPER)),
         }
     }
 }
@@ -83,10 +87,11 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "Shift+A", description: "Create a .tar.gz archive", action: Action::Archive, input: Input::ShiftLetter('a'), section: "FILES" },
     Binding { label: "Shift+E", description: "Extract the selected archive", action: Action::Extract, input: Input::ShiftLetter('e'), section: "FILES" },
     Binding { label: "Shift+Q", description: "Open the job queue (Del removes waiting jobs)", action: Action::Jobs, input: Input::ShiftLetter('q'), section: "FILES" },
+    Binding { label: "Alt/Cmd+1..9", description: "Jump to saved directory in active pane", action: Action::Jump(0), input: Input::JumpDigit, section: "NAVIGATION" },
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, Copy, Move, Archive, Extract, Jobs }
+pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, Copy, Move, Archive, Extract, Jobs, Jump(u8), JumpSet(u8), JumpDelete(u8) }
 
 pub struct Command {
     pub name: &'static str,
@@ -105,14 +110,33 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "archive", description: "Create a .tar.gz archive", action: CommandAction::Archive },
     Command { name: "extract", description: "Extract selected archive", action: CommandAction::Extract },
     Command { name: "jobs", description: "Show and manage the file-operation queue", action: CommandAction::Jobs },
+    Command { name: "j1", description: "Jump to slot 1–9 (e.g. :j3)", action: CommandAction::Jump(1) },
+    Command { name: "jset 1", description: "Save active directory to slot 1–9", action: CommandAction::JumpSet(1) },
+    Command { name: "jdel 1", description: "Remove a saved jump (1–9)", action: CommandAction::JumpDelete(1) },
 ];
 
 pub fn action_for(key: KeyEvent) -> Option<Action> {
-    BINDINGS.iter().find(|binding| binding.input.matches(key)).map(|binding| binding.action)
+    let action = BINDINGS.iter().find(|binding| binding.input.matches(key))?.action;
+    if action == Action::Jump(0) {
+        if let KeyCode::Char(ch) = key.code {
+            return ch.to_digit(10).map(|slot| Action::Jump(slot as u8));
+        }
+    }
+    Some(action)
 }
 
 pub fn command_for(text: &str) -> Option<CommandAction> {
-    COMMANDS.iter().find(|command| command.name == text.trim()).map(|command| command.action)
+    let text = text.trim();
+    if let Some(slot) = text.strip_prefix("jset ").and_then(crate::jumps::parse_slot) {
+        return Some(CommandAction::JumpSet(slot));
+    }
+    if let Some(slot) = text.strip_prefix("jdel ").and_then(crate::jumps::parse_slot) {
+        return Some(CommandAction::JumpDelete(slot));
+    }
+    if let Some(slot) = text.strip_prefix('j').and_then(crate::jumps::parse_slot) {
+        return Some(CommandAction::Jump(slot));
+    }
+    COMMANDS.iter().find(|command| command.name == text).map(|command| command.action)
 }
 
 pub fn help_lines() -> Vec<Line<'static>> {
@@ -194,6 +218,25 @@ mod tests {
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::NONE)), Some(Action::Copy));
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::SHIFT)), Some(Action::Move));
         assert_eq!(action_for(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT)), Some(Action::Help));
+    }
+
+    #[test]
+    fn alt_or_super_digit_activates_jump_without_disrupting_plain_numbers() {
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT)), Some(Action::Jump(1)));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::SUPER)), Some(Action::Jump(9)));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE)), None);
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::ALT)), None);
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::CONTROL)), None);
+    }
+
+    #[test]
+    fn jump_commands_accept_only_one_through_nine() {
+        assert_eq!(command_for("jset 7"), Some(CommandAction::JumpSet(7)));
+        assert_eq!(command_for("jdel 2"), Some(CommandAction::JumpDelete(2)));
+        assert_eq!(command_for("j9"), Some(CommandAction::Jump(9)));
+        for text in ["j0", "j10", "jset 0", "jdel 20", "jset", "j 1"] {
+            assert_eq!(command_for(text), None);
+        }
     }
 
     #[test]
