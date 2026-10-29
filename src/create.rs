@@ -35,7 +35,7 @@ fn invalid(reason: impl Into<String>) -> io::Error {
 
 fn validate_segment(segment: &str) -> io::Result<()> {
     if segment.is_empty() || segment == "." || segment == ".." ||
-        segment.as_bytes().len() > MAX_NAME_BYTES ||
+        segment.len() > MAX_NAME_BYTES ||
         segment.trim() != segment ||
         segment.contains('\\') ||
         segment.chars().any(char::is_control)
