@@ -3544,6 +3544,87 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_a_selects_regular_files_and_clears_on_second_press() -> io::Result<()> {
+        let root = split_fixture()?;
+        fs::write(root.join("photo01.jpg"), b"a")?;
+        fs::write(root.join("photo02.jpg"), b"b")?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.selection.count(), 3); // notes.txt + two photos, no folders
+        for (index, entry) in app.entries.iter().enumerate() {
+            assert_eq!(app.selection.contains(index), !entry.is_dir);
+        }
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.selection.count(), 0);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn batch_rename_dialog_queues_and_renames_only_selected_files() -> io::Result<()> {
+        let root = split_fixture()?;
+        fs::write(root.join("photo01.jpg"), b"first")?;
+        fs::write(root.join("photo02.jpg"), b"second")?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        for (index, entry) in app.entries.iter().enumerate() {
+            if entry.name.starts_with("photo") {
+                app.selection.toggle(index);
+            }
+        }
+        app.handle_key(key(KeyCode::Char('R'), KeyModifiers::SHIFT));
+        assert_eq!(app.rename_dialog.as_ref().unwrap().count(), 2);
+        for ch in "Urlaub_in_China".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE)); // review
+        assert!(app.job.is_none());
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE)); // confirm
+        assert!(app.rename_dialog.is_none());
+        complete_job(&mut app)?;
+        assert_eq!(fs::read(root.join("Urlaub_in_China_01.jpg"))?, b"first");
+        assert_eq!(fs::read(root.join("Urlaub_in_China_02.jpg"))?, b"second");
+        assert!(root.join("notes.txt").exists());
+        assert!(root.join("alpha").is_dir());
+        assert!(app.error.is_none());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn batch_rename_cancel_does_not_modify_files() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        let note = app.entries.iter().position(|e| e.name == "notes.txt").unwrap();
+        app.selected = note;
+        app.handle_key(key(KeyCode::Char('R'), KeyModifiers::SHIFT));
+        assert!(app.rename_dialog.is_some());
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.rename_dialog.is_none());
+        assert!(root.join("notes.txt").exists());
+        assert!(app.job.is_none());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn selecting_all_in_split_only_marks_active_pane() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.selection.count(), 1);
+        assert_eq!(app.other.as_ref().unwrap().selection.count(), 0);
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.selection.count(), 0);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
