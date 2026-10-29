@@ -21,6 +21,7 @@ mod pane;
 mod preview;
 mod queue;
 mod remote;
+mod rename_dialog;
 mod render;
 mod selection;
 mod tree;
@@ -39,6 +40,7 @@ use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_colu
 use preview::Preview;
 use queue::WorkQueue;
 use remote::Remote;
+use rename_dialog::{RenameDialog, Result as RenameResult};
 use tree::{RowKind, TreeState};
 use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -234,6 +236,7 @@ struct App {
     active_right: bool,
     pending_transfer: Option<Transfer>,
     pending_remote_transfer: Option<remote::RemoteTransfer>,
+    rename_dialog: Option<RenameDialog>,
     status: Option<String>,
     pending_archive: Option<ArchiveJob>,
     help_open: bool,
@@ -283,6 +286,7 @@ impl App {
             active_right: false,
             pending_transfer: None,
             pending_remote_transfer: None,
+            rename_dialog: None,
             status: None,
             pending_archive: None,
             help_open: false,
@@ -560,6 +564,71 @@ impl App {
             self.selection.toggle(self.selected);
         }
         self.clear_typed();
+    }
+
+    fn select_all_files(&mut self) {
+        let indices = self.entries.iter().enumerate()
+            .filter(|(index, entry)| !entry.is_dir && !entry.is_symlink
+                && entry.path.parent() == Some(self.cwd.as_path())
+                && self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if indices.is_empty() {
+            self.error = Some("No regular files in the active directory".into());
+            return;
+        }
+        let all_marked = indices.iter().all(|index| self.selection.contains(*index));
+        self.selection.clear();
+        if !all_marked {
+            for index in indices { self.selection.toggle(index); }
+        }
+        self.error = None;
+        self.status = Some(if all_marked { "Cleared file selection".into() }
+            else { format!("Selected {} file(s)", self.selection.count()) });
+        self.clear_typed();
+    }
+
+    fn open_batch_rename(&mut self) {
+        if self.remote.is_some() {
+            self.error = Some("Batch rename currently supports local panes only".into());
+            return;
+        }
+        if self.queue.len() >= queue::MAX_WAITING {
+            self.error = Some("Job queue is full".into());
+            return;
+        }
+        let has_marks = self.selection.count() > 0;
+        let sources = self.entries.iter().enumerate()
+            .filter(|(index, _)| if has_marks { self.selection.contains(*index) }
+                else { !self.parent_focused && *index == self.selected })
+            .filter(|(index, entry)| !entry.is_dir && !entry.is_symlink
+                && entry.path.parent() == Some(self.cwd.as_path())
+                && self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
+            .map(|(_, entry)| entry.path.clone())
+            .collect::<Vec<_>>();
+        if sources.is_empty() {
+            self.error = Some("Mark files (Ctrl+A), then Shift+R to rename".into());
+            return;
+        }
+        if sources.len() > batch_rename::MAX_FILES {
+            self.error = Some("Batch rename is limited to 5000 files".into());
+            return;
+        }
+        self.rename_dialog = Some(RenameDialog::new(sources));
+        self.clear_typed();
+        self.error = None;
+    }
+
+    fn handle_batch_rename_key(&mut self, key: KeyEvent) {
+        let result = self.rename_dialog.as_mut().map(|dialog| dialog.handle(key));
+        match result {
+            Some(RenameResult::Cancel) => { self.rename_dialog = None; },
+            Some(RenameResult::Submit(plan)) => {
+                self.rename_dialog = None;
+                self.begin_work(Work::BatchRename(plan));
+            },
+            _ => {}
+        }
     }
 
     fn switch_pane(&mut self) {
@@ -1101,6 +1170,7 @@ impl App {
 
     fn draw_overlays(&self, frame: &mut Frame, area: Rect) {
         self.draw_transfer_dialog(frame, area);
+        if let Some(dialog) = &self.rename_dialog { dialog.draw(frame, area); }
         self.draw_archive_dialog(frame, area);
         self.draw_queue_dialog(frame, area);
         if self.help_open {
@@ -1360,6 +1430,8 @@ impl App {
                     Some(CommandAction::Normal) => self.normal_mode(),
                     Some(CommandAction::Copy) => self.start_transfer(TransferKind::Copy),
                     Some(CommandAction::Move) => self.start_transfer(TransferKind::Move),
+                    Some(CommandAction::BatchRename) => self.open_batch_rename(),
+                    Some(CommandAction::SelectAll) => self.select_all_files(),
                     Some(CommandAction::Archive) => self.start_archive(false),
                     Some(CommandAction::Extract) => self.start_archive(true),
                     Some(CommandAction::Jobs) => { self.queue_open = true; self.queue_selected = 0; },
@@ -1434,6 +1506,11 @@ impl App {
             }
         }
 
+        if self.rename_dialog.is_some() {
+            self.handle_batch_rename_key(key);
+            return;
+        }
+
         if self.help_open {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') => self.help_open = false,
@@ -1485,6 +1562,8 @@ impl App {
             Some(Action::MarkUp) => self.move_cursor(-1, true),
             Some(Action::MarkDown) => self.move_cursor(1, true),
             Some(Action::Mark) => self.toggle_current(),
+            Some(Action::SelectAll) => self.select_all_files(),
+            Some(Action::BatchRename) => self.open_batch_rename(),
             Some(Action::Clear) => { self.selection.clear(); self.clear_typed(); }
             Some(Action::Copy) => self.start_transfer(TransferKind::Copy),
             Some(Action::Move) => self.start_transfer(TransferKind::Move),
