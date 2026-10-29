@@ -17,7 +17,19 @@ pub enum MetadataPosition {
 pub struct Config {
     pub metadata_position: MetadataPosition,
     pub jumps: BTreeMap<String, String>,
+    pub connections: BTreeMap<String, ConnectionConfig>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectionConfig {
+    /// SSH host alias from ~/.ssh/config, optionally user@host.
+    pub host: String,
+    /// Absolute directory to show initially (default: /).
+    #[serde(default = "default_remote_path")]
+    pub path: PathBuf,
+}
+fn default_remote_path() -> PathBuf { PathBuf::from("/") }
 
 impl Config {
     pub fn load() -> io::Result<Self> {
