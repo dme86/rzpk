@@ -2255,7 +2255,7 @@ mod tests {
     fn modes_use_single_neutral_brackets_and_commas() {
         let all = mode_indicator(true, true, true);
         let label = all.iter().map(|span| span.content.as_ref()).collect::<String>();
-        assert_eq!(label, "[v, p, t]");
+        assert_eq!(label, "[v,p,t]");
         assert_eq!(
             mode_indicator(false, true, false)
                 .iter().map(|span| span.content.as_ref()).collect::<String>(),
