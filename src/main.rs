@@ -90,7 +90,7 @@ fn mode_indicator(vertical: bool, preview: bool, tree: bool) -> Vec<Span<'static
             spans.push(Span::styled("[", Style::default().fg(Color::Rgb(146, 131, 116))));
             first = false;
         } else {
-            spans.push(Span::styled(", ", Style::default().fg(Color::Rgb(146, 131, 116))));
+            spans.push(Span::styled(",", Style::default().fg(Color::Rgb(146, 131, 116))));
         }
         spans.push(Span::styled(name, Style::default().fg(color)));
     }
@@ -1644,6 +1644,16 @@ mod tests {
             last_test_key: None,
             jump_prefix_since: None,
         }
+    }
+
+    #[test]
+    fn mode_badges_have_no_spaces_after_commas() {
+        let display = mode_indicator(true, true, true)
+            .iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert_eq!(display, "[v,p,t]");
+        let display = mode_indicator(true, true, false)
+            .iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert_eq!(display, "[v,p]");
     }
 
     #[test]
