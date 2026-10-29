@@ -11,6 +11,7 @@ mod config;
 mod details;
 mod fileops;
 mod focus;
+mod highlight;
 mod jobs;
 mod jumps;
 mod pane;
