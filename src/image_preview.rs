@@ -13,7 +13,7 @@ use std::{
 use image::GenericImageView;
 use ratatui_image::{
     picker::Picker,
-    thread::{ResizeResponse, ThreadProtocol},
+    thread::{ResizeRequest, ResizeResponse, ThreadProtocol},
 };
 
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
@@ -73,7 +73,7 @@ impl ImagePreview {
         let decoded = image::open(path)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         let dimensions = decoded.dimensions();
-        let (request_tx, request_rx) = mpsc::channel();
+        let (request_tx, request_rx) = mpsc::channel::<ResizeRequest>();
         let (completed_tx, completed_rx) = mpsc::channel();
         thread::Builder::new()
             .name("rzpk-image-encode".into())
