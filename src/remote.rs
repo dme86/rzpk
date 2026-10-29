@@ -110,17 +110,26 @@ impl Remote {
         Ok(entries)
     }
 
-    pub fn preview(&self, path: &Path) -> io::Result<Vec<u8>> {
+    /// Read *up to* a bounded prefix. SFTP read_all() requests exactly the
+    /// specified byte count and returns an error at EOF for shorter files,
+    /// which is unsuitable for previews and temporary editor downloads.
+    fn read_prefix(&self, path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
         self.rt.block_on(async {
-            let mut filesystem = self.sftp.fs();
-            let metadata = filesystem.metadata(path).await.map_err(other)?;
-            if metadata.len().is_some_and(|len| len > MAX_PREVIEW as u64) {
-                // Still allow the first MAX_PREVIEW bytes.
-            }
             let mut file = self.sftp.open(path).await.map_err(other)?;
-            let bytes = file.read_all(MAX_PREVIEW + 1, BytesMut::new()).await.map_err(other)?;
-            Ok(bytes.to_vec())
+            let mut bytes = Vec::new();
+            while bytes.len() < max_bytes {
+                let requested = (max_bytes - bytes.len()).min(64 * 1024) as u32;
+                match file.read(requested, BytesMut::new()).await.map_err(other)? {
+                    Some(chunk) => bytes.extend_from_slice(&chunk),
+                    None => break,
+                }
+            }
+            Ok(bytes)
         })
+    }
+
+    pub fn preview(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.read_prefix(path, MAX_PREVIEW + 1)
     }
 
     /// Copy one regular file from remote to local with exclusive destination.
@@ -186,14 +195,11 @@ impl Remote {
         if stamp.size.is_some_and(|size| size > MAX_EDIT as u64) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
         }
-        let data = self.rt.block_on(async {
-            let mut file = self.sftp.open(path).await.map_err(other)?;
-            file.read_all(MAX_EDIT + 1, BytesMut::new()).await.map_err(other)
-        })?;
+        let data = self.read_prefix(path, MAX_EDIT + 1)?;
         if data.len() > MAX_EDIT {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
         }
-        Ok((data.to_vec(), stamp))
+        Ok((data, stamp))
     }
 
     pub fn save_edit(&self, local: &Path, remote_path: &Path, expected: &EditStamp) -> io::Result<()> {
