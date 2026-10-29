@@ -489,6 +489,23 @@ mod tests {
         assert_eq!(fs::read(downloaded.join("move-me.txt"))?, b"move via sftp");
         assert!(!remote.list(&remote_folder)?.iter().any(|entry| entry.name == "move-me.txt"));
 
+        // Create a nested SFTP project tree and an empty file without overwriting.
+        let created = crate::create::CreatePlan::build(remote_folder.clone(), "new-project",
+            crate::create::Kind::Folder, "src/main, docs, assets",
+            Some(remote.clone()))?;
+        created.execute(&Arc::new(Progress::new()))?;
+        assert!(remote.list(&remote_folder.join("new-project"))?
+            .iter().any(|entry| entry.name == "src" && entry.is_dir));
+        let blank = crate::create::CreatePlan::build(remote_folder.join("new-project"),
+            "README.md", crate::create::Kind::File, "", Some(remote.clone()))?;
+        blank.execute(&Arc::new(Progress::new()))?;
+        assert_eq!(remote.preview(&remote_folder.join("new-project/README.md"))?, b"");
+        assert!(blank.execute(&Arc::new(Progress::new())).is_err());
+        remote.remove_file(&remote_folder.join("new-project/README.md"))?;
+        for path in ["src/main", "assets", "docs", "src", ""] {
+            remote.rmdir(&remote_folder.join("new-project").join(path))?;
+        }
+
         remote.remove_file(&remote_folder.join("nested/deeper/other.txt"))?;
         remote.remove_file(&remote_folder.join("nested/hello.txt"))?;
         remote.rmdir(&remote_folder.join("nested/deeper"))?;
