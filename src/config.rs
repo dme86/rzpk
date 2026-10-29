@@ -141,6 +141,25 @@ mod tests {
     }
 
     #[test]
+    fn sftp_profiles_parse_and_do_not_store_credentials() {
+        let source = r#"
+metadata_position = "right"
+[connections.nas]
+host = "my-nas"
+path = "/volume1/projects"
+[connections.prod]
+host = "deploy@prod.example.org"
+"#;
+        let config: Config = toml::from_str(source).unwrap();
+        assert_eq!(config.connections["nas"].host, "my-nas");
+        assert_eq!(config.connections["nas"].path, Path::new("/volume1/projects"));
+        assert_eq!(config.connections["prod"].path, Path::new("/"));
+        assert!(toml::from_str::<Config>(
+            "[connections.bad]\nhost = 'server'\npassword = 'unsafe'"
+        ).is_err(), "Password fields must not be accepted");
+    }
+
+    #[test]
     fn no_configuration_uses_right_layout() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.metadata_position, MetadataPosition::Right);
