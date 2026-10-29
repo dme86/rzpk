@@ -570,6 +570,20 @@ impl App {
         self.active_right = !self.active_right;
     }
 
+    /// Exchange the visible left/right positions without swapping the pane
+    /// data. The focused pane (stored in self) follows its contents to the
+    /// opposite side. Everything pane-local stays intact: cwd, cursor, marks,
+    /// scroll, directory history, tree, preview, search and error state.
+    fn swap_panes(&mut self) {
+        if self.other.is_none() {
+            self.error = Some("Open split view (:v) to swap panes".to_owned());
+            return;
+        }
+        self.active_right = !self.active_right;
+        self.error = None;
+        self.status = Some("Swapped left and right panes".to_owned());
+    }
+
     fn toggle_vertical_split(&mut self) -> io::Result<()> {
         if self.other.is_some() {
             // Closing the split always keeps the left pane visible.
@@ -1117,6 +1131,7 @@ impl App {
                         }
                     }
                     Some(CommandAction::Preview) => self.toggle_preview(),
+                    Some(CommandAction::SwapPanes) => self.swap_panes(),
                     Some(CommandAction::Tree) => {
                         if let Err(error) = self.toggle_tree() {
                             self.error = Some(error.to_string());
@@ -1235,6 +1250,7 @@ impl App {
             Some(Action::Help) => { self.help_open = true; self.help_scroll = 0; self.clear_typed(); }
             Some(Action::Command) => { self.command = Some(String::new()); self.clear_typed(); self.error = None; }
             Some(Action::SwitchPane) => self.switch_pane(),
+            Some(Action::SwapPanes) => self.swap_panes(),
             Some(Action::Parent) => {
                 if let Err(error) = self.parent() { self.error = Some(error.to_string()); }
             }
@@ -1408,7 +1424,7 @@ impl App {
         title.extend(mode_indicator(split, self.preview_mode, self.tree_mode));
         if split {
             title.push(Span::styled(
-                "  Tab: switch",
+                "  Tab: focus · S: swap",
                 Style::default().fg(Color::DarkGray),
             ));
         } else {
