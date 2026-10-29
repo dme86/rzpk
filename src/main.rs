@@ -1424,7 +1424,7 @@ impl App {
         title.extend(mode_indicator(split, self.preview_mode, self.tree_mode));
         if split {
             title.push(Span::styled(
-                "  Tab: focus · S: swap",
+                "  Tab: focus · Shift+S: swap",
                 Style::default().fg(Color::DarkGray),
             ));
         } else {
@@ -2030,7 +2030,7 @@ mod tests {
         let mut app = app(read_directory(&root)?);
         app.cwd = root.clone();
         app.toggle_vertical_split()?;
-        app.toggle_preview()?;
+        app.toggle_preview();
         app.toggle_tree()?;
 
         let index = app.entries.iter().position(|entry| entry.name == "notes.txt").unwrap();
