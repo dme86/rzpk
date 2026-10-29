@@ -7,6 +7,7 @@ use std::{
 };
 
 mod archive;
+mod batch_rename;
 mod commands;
 mod config;
 mod details;
@@ -25,6 +26,7 @@ mod selection;
 mod tree;
 
 use archive::ArchiveJob;
+use batch_rename::BatchRename;
 use commands::{Action, CommandAction, action_for, command_for, draw_help, help_max_scroll};
 use config::{Config, MetadataPosition};
 use details::permissions;
