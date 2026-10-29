@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{archive::ArchiveJob, fileops::{Transfer, TransferKind}, remote::RemoteTransfer};
+use crate::{archive::ArchiveJob, fileops::{Transfer, TransferKind}, remote::{RemoteTransfer, RemoteSave}};
 
 #[derive(Debug)]
 pub struct Progress {
@@ -24,7 +24,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             bytes: AtomicU64::new(0),
             items: AtomicU64::new(0),
@@ -147,6 +147,7 @@ pub enum Work {
     Transfer(Transfer),
     Archive(ArchiveJob),
     Remote(RemoteTransfer),
+    RemoteSave(RemoteSave),
 }
 
 impl Work {
@@ -162,6 +163,7 @@ impl Work {
                 TransferKind::Copy => "SFTP copying",
                 TransferKind::Move => "SFTP moving",
             },
+            Self::RemoteSave(_) => "SFTP saving",
         }
     }
 
@@ -180,6 +182,7 @@ impl Work {
                 format!("{verb} {items} → {}", transfer.destination.display())
             }
             Self::Remote(job) => job.description(),
+            Self::RemoteSave(job) => format!("Save remote · {}", job.target.display()),
             Self::Archive(archive) => match archive {
                 ArchiveJob::Pack { sources, target } => format!(
                     "Pack {} item(s) → {}",
@@ -227,6 +230,7 @@ impl RunningJob {
                     }
                     Work::Archive(job) => job.execute_with_progress(&worker_progress),
                     Work::Remote(job) => job.execute(&worker_progress),
+                    Work::RemoteSave(job) => job.execute(),
                 };
                 let _ = tx.send(result);
             })?;
