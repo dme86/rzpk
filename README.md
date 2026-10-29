@@ -95,6 +95,20 @@ The preview shows the first 24 KiB of remote text with Gruvbox syntax coloring a
 
 **Current limitations:** Remote tree expansion, image rendering of remote files, remote-to-remote copying, direct archive operations on remote panes and FTP/FTPS are not yet supported. Directory listings and text previews currently wait for an SFTP response; the initial SSH connection and bulk file transfers run in the background. You can still navigate the local pane while remote file jobs run.
 
+## Batch rename and select all
+
+Press **Ctrl+A** to mark every regular file in the active directory (press it again to clear all marks). Directories, symbolic links, the virtual `[..]` row, and files in nested tree branches are not included. Only the active pane is affected, even when `:v` is enabled. Alternative: `:all`.
+
+With files marked, press **Shift+R** or enter **`:rename`**. If nothing is marked, the focused regular file is used. A small **Gruvbox batch-rename dialog** lets you enter:
+
+- **Base name** – for example `Urlaub_in_China`
+- **Start** – default `1`
+- **Digits** – default `2` or more for larger selections
+
+Move between fields with **Tab / Shift+Tab or ↑/↓**, then press **Enter** to check names and review a preview; press **Enter again** to confirm or **Esc** to cancel. For example, `IMG_001.jpg`, `IMG_002.jpg`, `IMG_003.png` become `Urlaub_in_China_01.jpg`, `Urlaub_in_China_02.jpg`, `Urlaub_in_China_03.png`. Each file keeps its original extension and sequence numbers follow filename sorting.
+
+Batch renaming is queued alongside other work and reports its item progress in the footer. It never intentionally overwrites an existing target, checks for collisions before starting, and uses no-overwrite filesystem hard links to prevent a competing process from replacing a target during rename. **Current scope: local regular files only, up to 5000 files in one directory**. On a partial failure, previously renamed files stay renamed; the job reports an error. SFTP batch renaming is not supported yet.
+
 ## Vertical split
 
 Type `:v` and press Enter to open two side-by-side views. The right pane starts in the same directory as the left, but each pane has its own folder, cursor, scroll position, incremental search and marked entries. The active pane is indicated by a green marker in its header; `rzpk [v]` appears in the global title. Press `Tab` to focus the other pane; all existing navigation and selection shortcuts apply only to the active pane. Press **`Shift+S` (Swap)** or enter **`:swap`** to exchange the **left and right pane positions** without changing their contents, directory history, cursor, marks, scroll position, preview or tree state. The focused pane moves together with its contents; `Tab` continues to change only the focus. `Shift+S` outside split view shows a friendly hint to enable `:v` first.
