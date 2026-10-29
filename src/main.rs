@@ -322,7 +322,9 @@ impl App {
     fn change_directory(&mut self, cwd: PathBuf, focus: Option<&Path>) -> io::Result<()> {
         // Load first: an inaccessible destination must not disturb the current
         // pane or overwrite its last remembered focus.
-        let (tree, entries) = if self.tree_mode {
+        let (tree, entries) = if let Some(remote) = &self.remote {
+            (None, remote.list(&cwd)?.into_iter().map(remote::RemoteEntry::into_entry).collect())
+        } else if self.tree_mode {
             let (tree, entries) = TreeState::open(&cwd)?;
             (Some(tree), entries)
         } else {
@@ -421,7 +423,7 @@ impl App {
         if let Some(entry) = self.entries.get(self.selected) {
             if entry.is_dir {
                 self.change_directory(entry.path.clone(), None)?;
-            } else if entry.path.is_file() {
+            } else if !entry.is_symlink && (self.remote.is_some() || entry.path.is_file()) {
                 self.pending_edit = Some(entry.path.clone());
                 self.clear_typed();
             }
@@ -617,7 +619,11 @@ impl App {
     fn refresh_active_preview(&mut self) {
         if self.preview_mode {
             self.preview = if !self.parent_focused && self.tree.as_ref().is_none_or(|tree| tree.is_real(self.selected)) {
-                Preview::selected(&self.entries, self.selected)
+                if let Some(remote) = &self.remote {
+                    self.entries.get(self.selected).map(|entry| Preview::remote(entry, remote))
+                } else {
+                    Preview::selected(&self.entries, self.selected)
+                }
             } else {
                 None
             };
@@ -640,6 +646,9 @@ impl App {
     }
 
     fn toggle_tree(&mut self) -> io::Result<()> {
+        if self.remote.is_some() || self.other.as_ref().is_some_and(|pane| pane.remote.is_some()) {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "Tree view is not supported for SFTP panes yet"));
+        }
         if self.tree_mode {
             let left_focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
             let left_entries = read_directory(&self.cwd)?;
@@ -880,6 +889,10 @@ impl App {
     }
 
     fn start_archive(&mut self, extract: bool) {
+        if self.remote.is_some() {
+            self.error = Some("Archive operations on SFTP panes are not supported yet".to_owned());
+            return;
+        }
         if self.queue.len() >= queue::MAX_WAITING {
             self.error = Some("Job queue is full".to_owned());
             return;
@@ -1065,6 +1078,10 @@ impl App {
     }
 
     fn jump_to_slot(&mut self, slot: u8) {
+        if self.remote.is_some() {
+            self.error = Some("Directory jumps currently target local directories only".into());
+            return;
+        }
         let Some(destination) = self.jumps.get(slot).map(Path::to_path_buf) else {
             self.error = Some(format!("Jump {slot} is not set (:jset {slot})"));
             return;
@@ -1085,6 +1102,10 @@ impl App {
     }
 
     fn save_jump(&mut self, slot: u8) {
+        if self.remote.is_some() {
+            self.error = Some("Jumps can currently be saved only from local directories".into());
+            return;
+        }
         match fs::canonicalize(&self.cwd).and_then(|directory| {
             if !directory.is_dir() {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "Current path is not a directory"));
