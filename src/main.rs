@@ -1249,11 +1249,11 @@ impl App {
                 self.error = Some(format!("SFTP connection failed: {error}"));
             }
             Ok(remote) => {
-                if self.other.is_none() {
-                    if let Err(error) = self.toggle_vertical_split() {
-                        self.error = Some(error.to_string());
-                        return true;
-                    }
+                if self.other.is_none()
+                    && let Err(error) = self.toggle_vertical_split()
+                {
+                    self.error = Some(error.to_string());
+                    return true;
                 }
                 if self.active_right != target_right { self.switch_pane(); }
                 let cwd = remote.root.clone();
