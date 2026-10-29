@@ -36,7 +36,7 @@ pub struct RenameDialog {
 impl RenameDialog {
     pub fn new(mut sources: Vec<PathBuf>) -> Self {
         sources.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-        let digits = sources.len().to_string().len().max(2).min(8).to_string();
+        let digits = sources.len().to_string().len().clamp(2, 8).to_string();
         Self { sources, prefix: String::new(), start: "1".into(), digits, field: 0, pending: None, error: None }
     }
 
