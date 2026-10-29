@@ -1992,6 +1992,110 @@ mod tests {
     }
 
     #[test]
+    fn shift_s_swaps_pane_positions_and_keeps_focus_with_its_contents() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+
+        app.change_directory(root.join("alpha"), None)?;
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        app.change_directory(root.join("beta"), None)?;
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.cwd, root.join("alpha"));
+        assert_eq!(app.other.as_ref().unwrap().cwd, root.join("beta"));
+        assert!(!app.active_right);
+
+        app.handle_key(key(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        // The active alpha pane moves from left to right; beta moves left.
+        assert!(app.active_right);
+        assert_eq!(app.cwd, root.join("alpha"));
+        assert_eq!(app.other.as_ref().unwrap().cwd, root.join("beta"));
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(!app.active_right); // beta is now physically on the left
+        assert_eq!(app.cwd, root.join("beta"));
+
+        app.handle_key(key(KeyCode::Char('s'), KeyModifiers::SHIFT));
+        assert!(app.active_right); // beta is moved to the right
+        assert_eq!(app.cwd, root.join("beta"));
+        assert_eq!(app.other.as_ref().unwrap().cwd, root.join("alpha"));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn swap_is_visual_only_and_preserves_marks_cursor_scroll_and_modes() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.toggle_preview()?;
+        app.toggle_tree()?;
+
+        let index = app.entries.iter().position(|entry| entry.name == "notes.txt").unwrap();
+        app.selected = index;
+        app.selection.toggle(index);
+        app.scroll = 2;
+        app.refresh_active_preview();
+
+        let initial_path = app.entries[index].path.clone();
+        let initial_preview = app.preview.as_ref().map(|preview| preview.title.clone());
+        app.swap_panes();
+
+        assert!(app.active_right);
+        assert_eq!(app.entries[app.selected].path, initial_path);
+        assert!(app.selection.contains(index));
+        assert_eq!(app.scroll, 2);
+        assert_eq!(app.preview.as_ref().map(|preview| preview.title.clone()), initial_preview);
+        assert!(app.tree_mode && app.preview_mode);
+        assert!(app.tree.is_some());
+
+        app.swap_panes();
+        assert!(!app.active_right);
+        assert_eq!(app.entries[app.selected].path, initial_path);
+        assert!(app.selection.contains(index));
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn colon_swap_only_changes_order_in_split_mode() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(app.active_right);
+
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        for ch in "swap".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!app.active_right);
+        assert!(app.other.is_some());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn swap_without_split_shows_helpful_error_and_plain_s_still_searches() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+
+        app.handle_key(key(KeyCode::Char('s'), KeyModifiers::NONE));
+        assert!(app.other.is_none());
+        assert!(app.running); // typing lowercase must not exit
+        app.handle_key(key(KeyCode::Char('S'), KeyModifiers::SHIFT));
+        assert!(app.error.as_deref().unwrap_or("").contains(":v"));
+        assert!(!app.active_right);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn pane_specific_search_and_escape_only_affect_active_side() -> io::Result<()> {
         let root = split_fixture()?;
         let mut app = app(read_directory(&root)?);
