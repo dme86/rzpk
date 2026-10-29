@@ -12,6 +12,7 @@ mod details;
 mod fileops;
 mod focus;
 mod highlight;
+mod image_preview;
 mod jobs;
 mod jumps;
 mod pane;
@@ -1481,7 +1482,7 @@ impl App {
             scroll: &mut self.scroll,
             typed: &self.typed,
             error: self.error.as_deref(),
-            preview: self.preview.as_ref(),
+            preview: self.preview.as_mut(),
             tree_rows: self.tree.as_ref().map(|tree| tree.rows.as_slice()),
         };
 
@@ -1576,6 +1577,14 @@ impl App {
             if self.poll_job() {
                 needs_redraw = true;
             }
+            if self.preview.as_mut().is_some_and(Preview::poll_image) {
+                needs_redraw = true;
+            }
+            if self.other.as_mut().is_some_and(|other| {
+                other.preview.as_mut().is_some_and(Preview::poll_image)
+            }) {
+                needs_redraw = true;
+            }
         }
         Ok(())
     }
@@ -1584,6 +1593,7 @@ impl App {
 fn main() -> io::Result<()> {
     let mut app = App::new()?;
     let mut terminal = ratatui::init();
+    image_preview::init_terminal_picker();
     let result = app.run(&mut terminal);
     ratatui::restore();
     result
