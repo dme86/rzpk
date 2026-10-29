@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use openssh::{KnownHosts, Session};
 use openssh_sftp_client::{Sftp, SftpOptions};
 use tokio::runtime::{Builder, Runtime};
-use crate::{Entry, jobs::Progress};
+use crate::{Entry, jobs::Progress, fileops::TransferKind};
 
 const MAX_LIST: usize = 2500;
 pub const MAX_PREVIEW: usize = 24 * 1024;
@@ -189,7 +189,154 @@ impl Remote {
         })
     }
 
+    pub fn mkdir(&self, path: &Path) -> io::Result<()> {
+        self.rt.block_on(async { self.sftp.fs().create_dir(path).await.map_err(other) })
+    }
+
+    pub fn rmdir(&self, path: &Path) -> io::Result<()> {
+        self.rt.block_on(async { self.sftp.fs().remove_dir(path).await.map_err(other) })
+    }
+
+    pub fn stat_type(&self, path: &Path) -> io::Result<(bool, bool, Option<u64>)> {
+        self.rt.block_on(async {
+            let meta = self.sftp.fs().symlink_metadata(path).await.map_err(other)?;
+            let kind = meta.file_type();
+            Ok((
+                kind.is_some_and(|t| t.is_dir()),
+                kind.is_some_and(|t| t.is_symlink()),
+                meta.len(),
+            ))
+        })
+    }
+
     pub fn home(&self) -> &Path { &self.root }
+}
+
+/// Snapshot of one local↔SFTP transfer. Sources are never interpreted as local
+/// paths when the source is remote, or vice versa.
+pub struct RemoteTransfer {
+    pub kind: TransferKind,
+    pub sources: Vec<PathBuf>,
+    pub destination: PathBuf,
+    pub source_remote: Option<Arc<Remote>>,
+    pub dest_remote: Option<Arc<Remote>>,
+}
+
+impl RemoteTransfer {
+    pub fn new(
+        kind: TransferKind, sources: Vec<PathBuf>, destination: PathBuf,
+        source_remote: Option<Arc<Remote>>, dest_remote: Option<Arc<Remote>>,
+    ) -> io::Result<Self> {
+        if sources.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "No files selected"));
+        }
+        if source_remote.is_some() == dest_remote.is_some() {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "Use one local and one SFTP pane"));
+        }
+        if sources.iter().any(|p| p.file_name().is_none()) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Cannot transfer a filesystem root"));
+        }
+        Ok(Self { kind, sources, destination, source_remote, dest_remote })
+    }
+
+    fn file_kind(&self, path: &Path) -> io::Result<(bool, bool, Option<u64>)> {
+        if let Some(remote) = &self.source_remote {
+            remote.stat_type(path)
+        } else {
+            let meta = fs::symlink_metadata(path)?;
+            Ok((meta.is_dir(), meta.file_type().is_symlink(), Some(meta.len())))
+        }
+    }
+
+    fn children(&self, directory: &Path) -> io::Result<Vec<PathBuf>> {
+        if let Some(remote) = &self.source_remote {
+            Ok(remote.list(directory)?.into_iter().map(|entry| entry.path).collect())
+        } else {
+            fs::read_dir(directory)?.map(|entry| entry.map(|entry| entry.path())).collect()
+        }
+    }
+
+    fn copy_file(&self, source: &Path, target: &Path, progress: &Arc<Progress>) -> io::Result<()> {
+        if let Some(remote) = &self.source_remote {
+            remote.download(source, target, progress)
+        } else if let Some(remote) = &self.dest_remote {
+            remote.upload(source, target, progress)
+        } else {
+            Err(io::Error::other("Transfer backend unavailable"))
+        }
+    }
+
+    fn mkdir(&self, target: &Path) -> io::Result<()> {
+        if let Some(remote) = &self.dest_remote { remote.mkdir(target) }
+        else { fs::create_dir(target) }
+    }
+
+    fn remove_source_file(&self, path: &Path) -> io::Result<()> {
+        if let Some(remote) = &self.source_remote { remote.remove_file(path) }
+        else { fs::remove_file(path) }
+    }
+
+    fn remove_source_dir(&self, path: &Path) -> io::Result<()> {
+        if let Some(remote) = &self.source_remote { remote.rmdir(path) }
+        else { fs::remove_dir(path) }
+    }
+
+    pub fn execute(&self, progress: &Arc<Progress>) -> io::Result<String> {
+        const MAX_ENTRIES: usize = 20_000;
+        const MAX_DEPTH: usize = 64;
+        progress.set_total(self.sources.len());
+        let mut copied = 0usize;
+        for source in &self.sources {
+            let name = source.file_name().ok_or_else(|| io::Error::other("Missing source filename"))?;
+            let target = self.destination.join(name);
+            let mut stack = vec![(source.clone(), target, 0usize)];
+            let mut copied_files = Vec::new();
+            let mut copied_dirs = Vec::new();
+            let mut visited = 0usize;
+            while let Some((src, dst, depth)) = stack.pop() {
+                visited += 1;
+                if visited > MAX_ENTRIES || depth > MAX_DEPTH {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "Transfer exceeds directory safety limits"));
+                }
+                let (is_dir, symlink, size) = self.file_kind(&src)?;
+                if symlink {
+                    return Err(io::Error::new(io::ErrorKind::Unsupported,
+                        format!("SFTP transfers do not follow symbolic links: {}", src.display())));
+                }
+                if is_dir {
+                    // create_dir must fail if the destination already exists.
+                    self.mkdir(&dst)?;
+                    copied_dirs.push(src.clone());
+                    let children = self.children(&src)?;
+                    for child in children.into_iter().rev() {
+                        let filename = child.file_name().ok_or_else(|| io::Error::other("Invalid child path"))?;
+                        stack.push((child, dst.join(filename), depth + 1));
+                    }
+                } else {
+                    self.copy_file(&src, &dst, progress)?;
+                    copied_files.push(src);
+                    if size == Some(0) { /* valid empty file */ }
+                }
+            }
+            if self.kind == TransferKind::Move {
+                // Only remove source entries after the entire root has copied.
+                for path in copied_files { self.remove_source_file(&path)?; }
+                for path in copied_dirs.into_iter().rev() { self.remove_source_dir(&path)?; }
+            }
+            copied += 1;
+            progress.item_done();
+        }
+        Ok(format!("{} {copied} item(s) via SFTP", self.kind.past_tense()))
+    }
+
+    pub fn description(&self) -> String {
+        let first = self.sources.first().and_then(|p| p.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "files".to_owned());
+        let host = self.source_remote.as_ref().or(self.dest_remote.as_ref())
+            .map(|remote| remote.name.as_str()).unwrap_or("remote");
+        format!("{} {} item(s) · {} · {first}", self.kind.verb(), self.sources.len(), host)
+    }
 }
 
 #[cfg(test)]
