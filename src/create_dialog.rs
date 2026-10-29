@@ -173,7 +173,9 @@ impl CreateDialog {
             lines.push(Line::from(vec![
                 Span::styled(if focused { "  ▸ " } else { "    " }, Style::default().fg(GREEN)),
                 Span::styled(format!("{label:<11}"), Style::default().fg(if focused { GOLD } else { MUTED })),
-                Span::styled(if value.is_empty() { "(optional)" .to_owned() } else { value.to_owned() },
+                Span::styled(if value.is_empty() {
+                    if index == 1 { "(required)".to_owned() } else { "(optional: Fotos, Videos)".to_owned() }
+                } else { value.to_owned() },
                     Style::default().fg(if focused { FG } else { GREEN })),
                 Span::styled(if focused { "█" } else { "" }, Style::default().fg(GOLD)),
             ]));
