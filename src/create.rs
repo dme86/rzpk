@@ -78,6 +78,9 @@ fn parse_children(text: &str) -> io::Result<Vec<PathBuf>> {
             all.insert(parent.clone());
         }
     }
+    if all.len() > MAX_CHILDREN {
+        return Err(invalid("At most 48 folders (including implicit parents) are supported"));
+    }
     let mut ordered = all.into_iter().collect::<Vec<_>>();
     ordered.sort_by(|a, b| a.components().count().cmp(&b.components().count()).then(a.cmp(b)));
     Ok(ordered)
@@ -197,7 +200,7 @@ mod tests {
         let dir = folder()?;
         let plan = CreatePlan::build(dir.path().to_path_buf(), "Urlaub China",
             Kind::Folder, "Fotos/Originale, Videos, Fotos/Bearbeitet, Dokumente", None)?;
-        assert_eq!(plan.children.len(), 6);
+        assert_eq!(plan.children.len(), 5);
         plan.execute(&Arc::new(Progress::new()))?;
         for name in ["Fotos", "Fotos/Originale", "Fotos/Bearbeitet", "Videos", "Dokumente"] {
             assert!(dir.path().join("Urlaub China").join(name).is_dir());
