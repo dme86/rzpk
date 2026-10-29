@@ -445,6 +445,32 @@ mod tests {
         assert_eq!(fs::read_to_string(downloaded.join("nested/hello.txt"))?, "roundtrip text");
         assert_eq!(fs::read_to_string(downloaded.join("nested/deeper/other.txt"))?, "nested file");
 
+        // Remote editing must upload changes and reject stale snapshots.
+        let editable = remote_folder.join("nested/hello.txt");
+        let (original, stamp) = remote.edit_snapshot(&editable)?;
+        assert_eq!(original, b"roundtrip text");
+        let working_copy = workspace.path().join("edited.txt");
+        fs::write(&working_copy, b"remote file changed and saved")?;
+        remote.save_edit(&working_copy, &editable, &stamp)?;
+        assert_eq!(remote.preview(&editable)?, b"remote file changed and saved");
+        assert!(remote.save_edit(&working_copy, &editable, &stamp).is_err());
+
+        // Move in both directions, validating that the source is removed only
+        // after a successful transfer.
+        let movable = workspace.path().join("move-me.txt");
+        fs::write(&movable, b"move via sftp")?;
+        let upload_move = RemoteTransfer::new(TransferKind::Move, vec![movable.clone()],
+            remote_folder.clone(), None, Some(remote.clone()))?;
+        upload_move.execute(&Arc::new(Progress::new()))?;
+        assert!(!movable.exists());
+        let moved_remote = remote_folder.join("move-me.txt");
+        assert!(remote.list(&remote_folder)?.iter().any(|entry| entry.name == "move-me.txt"));
+        let download_move = RemoteTransfer::new(TransferKind::Move,
+            vec![moved_remote], downloaded.clone(), Some(remote.clone()), None)?;
+        download_move.execute(&Arc::new(Progress::new()))?;
+        assert_eq!(fs::read(downloaded.join("move-me.txt"))?, b"move via sftp");
+        assert!(!remote.list(&remote_folder)?.iter().any(|entry| entry.name == "move-me.txt"));
+
         remote.remove_file(&remote_folder.join("nested/deeper/other.txt"))?;
         remote.remove_file(&remote_folder.join("nested/hello.txt"))?;
         remote.rmdir(&remote_folder.join("nested/deeper"))?;
