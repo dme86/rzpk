@@ -13,7 +13,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::{Entry, highlight};
+use crate::{Entry, highlight, image_preview::{self, ImagePreview}};
+use ratatui_image::{Resize, StatefulImage};
 
 const MAX_BYTES: u64 = 24 * 1024;
 const MAX_LINES: usize = 120;
@@ -21,12 +22,13 @@ const MAX_DIRECTORY_ITEMS: usize = 60;
 const GRUVBOX_YELLOW: Color = Color::Rgb(215, 153, 33);
 const GRUVBOX_AQUA: Color = Color::Rgb(142, 192, 124);
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Preview {
     pub title: String,
     pub lines: Vec<String>,
     pub syntax: Option<String>,
     pub styled_lines: Option<Vec<Line<'static>>>,
+    pub image: Option<ImagePreview>,
 }
 
 impl Preview {
@@ -36,23 +38,31 @@ impl Preview {
 
     fn load(entry: &Entry) -> Self {
         let title = entry.name.clone();
-        let lines = if entry.is_symlink {
-            match fs::read_link(&entry.path) {
+        let (lines, image) = if entry.is_symlink {
+            (match fs::read_link(&entry.path) {
                 Ok(target) => vec![format!("→ {}", target.display())],
                 Err(error) => vec![format!("Cannot read link: {error}")],
-            }
+            }, None)
         } else if entry.is_dir {
-            directory_preview(&entry.path)
+            (directory_preview(&entry.path), None)
         } else if fs::symlink_metadata(&entry.path)
             .is_ok_and(|metadata| metadata.file_type().is_file())
         {
-            file_preview(&entry.path)
+            if image_preview::supports_path(&entry.path) {
+                match ImagePreview::open(&entry.path) {
+                    Ok(image) => (Vec::new(), Some(image)),
+                    Err(error) => (vec![format!("(image preview unavailable: {error})")], None),
+                }
+            } else {
+                (file_preview(&entry.path), None)
+            }
         } else {
-            vec!["(not a regular file — no text preview)".to_string()]
+            (vec!["(not a regular file — no text preview)".to_owned()], None)
         };
-        let highlighted = if !entry.is_symlink && !entry.is_dir
+        let highlighted = if image.is_none() && !entry.is_symlink && !entry.is_dir
             && !lines.first().is_some_and(|line| {
-                line.starts_with("(binary") || line.starts_with("Cannot ") || line.starts_with("(not a regular")
+                line.starts_with("(binary") || line.starts_with("Cannot ")
+                    || line.starts_with("(not a regular") || line.starts_with("(image preview")
             })
         {
             highlight::highlight(&entry.path, &lines)
@@ -63,7 +73,11 @@ impl Preview {
             Some((syntax, styled_lines)) => (Some(syntax), Some(styled_lines)),
             None => (None, None),
         };
-        Self { title, lines, syntax, styled_lines }
+        Self { title, lines, syntax, styled_lines, image }
+    }
+
+    pub fn poll_image(&mut self) -> bool {
+        self.image.as_mut().is_some_and(ImagePreview::poll)
     }
 }
 
@@ -152,12 +166,19 @@ fn file_preview(path: &Path) -> Vec<String> {
     lines
 }
 
-pub fn draw_preview(frame: &mut Frame, area: Rect, preview: Option<&Preview>) {
+pub fn draw_preview(frame: &mut Frame, area: Rect, mut preview: Option<&mut Preview>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let title = preview
+        .as_ref()
         .map(|preview| {
+            if let Some(image) = &preview.image {
+                return format!(
+                    " PREVIEW · {} · {} · {}×{} ",
+                    preview.title, image.format, image.dimensions.0, image.dimensions.1,
+                );
+            }
             let syntax = preview.syntax.as_deref()
                 .map(|name| format!(" · {name}"))
                 .unwrap_or_default();
@@ -173,7 +194,22 @@ pub fn draw_preview(frame: &mut Frame, area: Rect, preview: Option<&Preview>) {
         ))
         .borders(Borders::LEFT | Borders::TOP)
         .border_style(Style::default().fg(Color::Rgb(80, 73, 69)));
+
+    if let Some(image) = preview.as_mut().and_then(|preview| preview.image.as_mut()) {
+        let inside = block.inner(area);
+        frame.render_widget(block, area);
+        if inside.width > 0 && inside.height > 0 {
+            frame.render_stateful_widget(
+                StatefulImage::default().resize(Resize::Fit(None)),
+                inside,
+                &mut image.protocol,
+            );
+        }
+        return;
+    }
+
     let lines = preview
+        .as_ref()
         .map(|preview| {
             if let Some(lines) = &preview.styled_lines {
                 return lines.clone();
@@ -233,6 +269,30 @@ mod tests {
         assert!(preview.syntax.is_some());
         assert_eq!(preview.styled_lines.as_ref().unwrap().len(), preview.lines.len());
         assert!(preview.styled_lines.unwrap()[0].spans.len() > 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn image_preview_opens_raster_without_text_decoding() {
+        use image::{ImageBuffer, Rgb};
+        let root = fixture();
+        let file = root.join("picture.png");
+        let raster = ImageBuffer::from_pixel(3, 2, Rgb([251u8, 73, 52]));
+        raster.save(&file).unwrap();
+        let entry = Entry {
+            path: file,
+            name: "picture.png".to_owned(),
+            name_key: "picture.png".to_owned(),
+            is_dir: false,
+            is_symlink: false,
+            permissions: String::new(),
+            size: None,
+            modified: None,
+        };
+        let preview = Preview::selected(&[entry], 0).unwrap();
+        assert_eq!(preview.image.as_ref().unwrap().dimensions, (3, 2));
+        assert!(preview.lines.is_empty());
+        assert!(preview.styled_lines.is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
