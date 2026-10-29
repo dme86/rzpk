@@ -65,12 +65,12 @@ impl BatchRename {
             return Err(invalid("Start number must be positive and within range"));
         }
         sources.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
-        let folder = sources[0].parent().ok_or_else(|| invalid("Missing parent directory"))?;
+        let folder = sources[0].parent().ok_or_else(|| invalid("Missing parent directory"))?.to_path_buf();
         let mut seen_src = HashSet::new();
         let mut seen_dst = HashSet::new();
         let mut pairs = Vec::with_capacity(sources.len());
         for (position, source) in sources.into_iter().enumerate() {
-            if source.parent() != Some(folder) || !seen_src.insert(source.clone()) {
+            if source.parent() != Some(folder.as_path()) || !seen_src.insert(source.clone()) {
                 return Err(invalid("All source files must be distinct files in one directory"));
             }
             let file_type = fs::symlink_metadata(&source)?.file_type();
