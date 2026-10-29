@@ -95,6 +95,20 @@ The preview shows the first 24 KiB of remote text with Gruvbox syntax coloring a
 
 **Current limitations:** Remote tree expansion, image rendering of remote files, remote-to-remote copying, direct archive operations on remote panes and FTP/FTPS are not yet supported. Directory listings and text previews currently wait for an SFTP response; the initial SSH connection and bulk file transfers run in the background. You can still navigate the local pane while remote file jobs run.
 
+## New file or folder (including subfolders)
+
+Press **Shift+N** (or `:new`) to open the compact Gruvbox **New** dialog for the currently active local or SFTP pane. The default kind is **Folder**; select **File** or **Folder** using the arrow keys on the **Type** field, or press `f` / `d` while that field is focused. Use **Tab**, **Shift+Tab** or **↑/↓** to move between the fields.
+
+Enter a name such as `Urlaub China`. For a folder, the optional **Subfolders** field accepts comma-separated relative paths, for example:
+
+```text
+Fotos/Originale, Fotos/Bearbeitet, Videos, Dokumente
+```
+
+rzpk automatically creates any missing intermediate folders **inside the new folder**. A live tree-style preview displays the planned structure in the dialog. Press **Enter** to validate, then **Enter again** to create; press **Esc** to cancel. **Backspace** from the confirmation screen returns to editing. Short commands **`:file`** and **`:folder`** open the same dialog with the corresponding kind preselected.
+
+Operations are processed through the regular FIFO job queue with progress feedback and leave the other pane untouched. An existing name is never silently replaced: local files are opened with `create_new`; directories and SFTP files use exclusive creation. Child paths cannot be absolute, contain `..`, or escape the new root. Up to 48 nested child folders (including automatically created intermediate directories), at a maximum depth of 8, are supported. If a child folder cannot be created, rzpk attempts to roll back the newly created **empty** directories; it never deliberately removes existing data.
+
 ## Batch rename and select all
 
 Press **Ctrl+A** to mark every regular file in the active directory (press it again to clear all marks). Directories, symbolic links, the virtual `[..]` row, and files in nested tree branches are not included. Only the active pane is affected, even when `:v` is enabled. Alternative: `:all`.
