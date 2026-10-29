@@ -1140,6 +1140,127 @@ impl App {
         }
     }
 
+    fn connect_profile(&mut self, name: &str) {
+        if self.pending_connect.is_some() {
+            self.error = Some("An SSH connection is already being established".to_owned());
+            return;
+        }
+        if self.tree_mode {
+            self.error = Some("Disable tree mode (:t) before connecting to SFTP".to_owned());
+            return;
+        }
+        let config = match Config::load() {
+            Ok(config) => config,
+            Err(error) => { self.error = Some(error.to_string()); return; }
+        };
+        let Some(profile) = config.connections.get(name).cloned() else {
+            self.error = Some(format!("Unknown SFTP profile: {name} (:connections)"));
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        let target_right = if self.other.is_none() { true } else { self.active_right };
+        let name = name.to_owned();
+        if let Err(error) = std::thread::Builder::new()
+            .name(format!("rzpk-ssh-{name}"))
+            .spawn(move || {
+                let result = Remote::connect(name, profile.host, profile.path);
+                let _ = tx.send(result);
+            })
+        {
+            self.error = Some(format!("Could not spawn SSH worker: {error}"));
+            return;
+        }
+        self.pending_connect = Some((target_right, rx));
+        self.error = None;
+        self.status = Some("Connecting SFTP (SSH key + strict host verification)…".to_owned());
+    }
+
+    fn poll_connection(&mut self) -> bool {
+        let Some((target_right, rx)) = self.pending_connect.as_ref() else { return false };
+        let target_right = *target_right;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) =>
+                Err(io::Error::other("SSH connection worker ended unexpectedly")),
+        };
+        self.pending_connect = None;
+        match result {
+            Err(error) => {
+                self.status = None;
+                self.error = Some(format!("SFTP connection failed: {error}"));
+            }
+            Ok(remote) => {
+                if self.other.is_none() {
+                    if let Err(error) = self.toggle_vertical_split() {
+                        self.error = Some(error.to_string());
+                        return true;
+                    }
+                }
+                if self.active_right != target_right { self.switch_pane(); }
+                let cwd = remote.root.clone();
+                let entries = match remote.list(&cwd) {
+                    Ok(entries) => entries.into_iter().map(remote::RemoteEntry::into_entry).collect(),
+                    Err(error) => {
+                        self.error = Some(format!("SFTP listing failed: {error}"));
+                        return true;
+                    }
+                };
+                self.remote = Some(remote);
+                self.cwd = cwd;
+                self.tree = None;
+                self.focus_history = FocusHistory::default();
+                self.parent_focused = false;
+                self.selection.clear();
+                self.replace_visible(entries, None, 0);
+                self.status = Some("SFTP connected · Tab switches local/remote".to_owned());
+                self.error = None;
+            }
+        }
+        true
+    }
+
+    fn disconnect_remote(&mut self) {
+        if self.job.is_some() || !self.queue.is_empty() {
+            self.error = Some("Finish pending file operations before disconnecting".into());
+            return;
+        }
+        if self.remote.is_none() {
+            self.error = Some("Active pane is not connected to SFTP".into());
+            return;
+        }
+        self.remote = None;
+        self.focus_history = FocusHistory::default();
+        let local = env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        match self.change_directory(local, None) {
+            Ok(()) => { self.status = Some("SFTP disconnected".to_owned()); self.error = None; }
+            Err(error) => self.error = Some(format!("Could not restore local pane: {error}")),
+        }
+    }
+
+    fn connections_status(&mut self) {
+        match Config::load() {
+            Ok(config) if config.connections.is_empty() => {
+                self.status = Some("No connections; add [connections.NAME] to config.toml".into());
+                self.error = None;
+            }
+            Ok(config) => {
+                let names = config.connections.keys().cloned().collect::<Vec<_>>().join(", ");
+                self.status = Some(format!("SFTP profiles: {names} · :connect NAME"));
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
+    fn refresh_directory(&mut self) {
+        let cwd = self.cwd.clone();
+        let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
+        if let Err(error) = self.change_directory(cwd, focus.as_deref()) {
+            self.error = Some(error.to_string());
+        }
+    }
+
     fn handle_command_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -1147,6 +1268,12 @@ impl App {
             KeyCode::Esc => self.command = None,
             KeyCode::Enter => {
                 let command = self.command.take().unwrap_or_default();
+                if let Some(name) = command.strip_prefix("connect ").map(str::trim)
+                    && !name.is_empty()
+                {
+                    self.connect_profile(name);
+                    return;
+                }
                 match command_for(&command) {
                     Some(CommandAction::Quit) => {
                         if self.job.is_some() || !self.queue.is_empty() {
@@ -1162,6 +1289,9 @@ impl App {
                     }
                     Some(CommandAction::Preview) => self.toggle_preview(),
                     Some(CommandAction::SwapPanes) => self.swap_panes(),
+                    Some(CommandAction::Disconnect) => self.disconnect_remote(),
+                    Some(CommandAction::Connections) => self.connections_status(),
+                    Some(CommandAction::Refresh) => self.refresh_directory(),
                     Some(CommandAction::Tree) => {
                         if let Err(error) = self.toggle_tree() {
                             self.error = Some(error.to_string());
@@ -1602,6 +1732,9 @@ impl App {
             if let Some(other) = self.other.as_mut()
                 && other.expire_search(TYPE_TIMEOUT)
             {
+                needs_redraw = true;
+            }
+            if self.poll_connection() {
                 needs_redraw = true;
             }
             if self.poll_job() {
