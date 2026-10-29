@@ -231,6 +231,7 @@ struct App {
     other: Option<PaneState>,
     active_right: bool,
     pending_transfer: Option<Transfer>,
+    pending_remote_transfer: Option<remote::RemoteTransfer>,
     status: Option<String>,
     pending_archive: Option<ArchiveJob>,
     help_open: bool,
@@ -279,6 +280,7 @@ impl App {
             other: None,
             active_right: false,
             pending_transfer: None,
+            pending_remote_transfer: None,
             status: None,
             pending_archive: None,
             help_open: false,
@@ -711,6 +713,20 @@ impl App {
             .filter(|(index, _)| self.tree.as_ref().is_none_or(|tree| tree.is_real(*index)))
             .map(|(_, entry)| entry.path.clone())
             .collect::<Vec<_>>();
+        if self.remote.is_some() || other.remote.is_some() {
+            match remote::RemoteTransfer::new(kind, sources, other.cwd.clone(),
+                self.remote.clone(), other.remote.clone())
+            {
+                Ok(transfer) => {
+                    self.pending_remote_transfer = Some(transfer);
+                    self.error = None;
+                    self.status = None;
+                    self.clear_typed();
+                }
+                Err(error) => self.error = Some(error.to_string()),
+            }
+            return;
+        }
         match Transfer::new(kind, sources, other.cwd.clone()) {
             Ok(transfer) => {
                 self.pending_transfer = Some(transfer);
@@ -727,7 +743,9 @@ impl App {
 
     fn refresh_after_transfer(&mut self) -> io::Result<()> {
         let focus = self.entries.get(self.selected).map(|entry| entry.path.clone());
-        let entries = if let Some(tree) = self.tree.as_mut() {
+        let entries = if let Some(remote) = &self.remote {
+            remote.list(&self.cwd)?.into_iter().map(remote::RemoteEntry::into_entry).collect()
+        } else if let Some(tree) = self.tree.as_mut() {
             tree.rebuild(&self.cwd)?
         } else {
             read_directory(&self.cwd)?
@@ -838,10 +856,15 @@ impl App {
 
     fn handle_transfer_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc => self.pending_transfer = None,
+            KeyCode::Esc => {
+                self.pending_transfer = None;
+                self.pending_remote_transfer = None;
+            }
             KeyCode::Enter => {
                 if let Some(transfer) = self.pending_transfer.take() {
                     self.begin_work(Work::Transfer(transfer));
+                } else if let Some(transfer) = self.pending_remote_transfer.take() {
+                    self.begin_work(Work::Remote(transfer));
                 }
             }
             _ => {}
@@ -849,9 +872,15 @@ impl App {
     }
 
     fn draw_transfer_dialog(&self, frame: &mut Frame, area: Rect) {
-        let Some(transfer) = self.pending_transfer.as_ref() else {
-            return;
-        };
+        let (kind, sources, destination, remote_label) =
+            if let Some(transfer) = self.pending_transfer.as_ref() {
+                (transfer.kind, &transfer.sources, &transfer.destination, None)
+            } else if let Some(transfer) = self.pending_remote_transfer.as_ref() {
+                (transfer.kind, &transfer.sources, &transfer.destination,
+                    Some(transfer.source_remote.as_ref().or(transfer.dest_remote.as_ref()).map(|r| r.name.as_str()).unwrap_or("remote")))
+            } else {
+                return;
+            };
         let width = area.width.saturating_sub(2).min(76);
         let height = area.height.saturating_sub(2).min(9);
         if width < 10 || height < 4 {
@@ -864,14 +893,15 @@ impl App {
             height,
         );
         let bg = Style::default().bg(Color::Rgb(40, 40, 40)).fg(Color::Rgb(235, 219, 178));
-        let from = transfer.sources.first()
+        let from = sources.first()
             .and_then(|path| path.parent())
             .unwrap_or(&self.cwd);
         let lines = vec![
-            Line::from(format!("  {} {} item(s)", transfer.kind.verb(), transfer.sources.len())),
+            Line::from(format!("  {} {} item(s){}", kind.verb(), sources.len(),
+                remote_label.map_or(String::new(), |name| format!(" via SFTP · {name}")))),
             Line::from(""),
             Line::from(format!("  From: {}", from.display())),
-            Line::from(format!("  To:   {}", transfer.destination.display())),
+            Line::from(format!("  To:   {}", destination.display())),
             Line::from(""),
             Line::from(Span::styled(
                 "  Enter: confirm    Esc: cancel",
@@ -879,7 +909,7 @@ impl App {
             )),
         ];
         let block = Block::default()
-            .title(format!(" {} confirmation ", transfer.kind.verb()))
+            .title(format!(" {} confirmation ", kind.verb()))
             .title_style(Style::default().fg(Color::Rgb(250, 189, 47)))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Rgb(146, 131, 116)))
@@ -1397,7 +1427,7 @@ impl App {
             self.handle_archive_key(key);
             return;
         }
-        if self.pending_transfer.is_some() {
+        if self.pending_transfer.is_some() || self.pending_remote_transfer.is_some() {
             self.handle_transfer_key(key);
             return;
         }
