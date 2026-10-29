@@ -19,6 +19,7 @@ use crate::{
     config::MetadataPosition,
     jumps::Jumps,
     focus::FocusHistory,
+    remote::Remote,
     details::Columns,
     render::{EntryHighlight, entry_line, maximum_name_width},
     selection::Selection,
@@ -39,6 +40,7 @@ pub struct PaneState {
     pub error: Option<String>,
     pub preview: Option<Preview>,
     pub tree: Option<TreeState>,
+    pub remote: Option<std::sync::Arc<Remote>>,
 }
 
 impl PaneState {
@@ -65,12 +67,14 @@ impl PaneState {
             error: None,
             preview: None,
             tree,
+            remote: None,
         })
     }
 
     pub fn view<'a>(&'a mut self, jumps: &'a Jumps) -> PaneView<'a> {
         PaneView {
             cwd: &self.cwd,
+            remote_name: self.remote.as_ref().map(|remote| remote.name.as_str()),
             jumps,
             entries: &self.entries,
             max_name_width: self.max_name_width,
@@ -149,6 +153,7 @@ impl PaneState {
 
 pub struct PaneView<'a> {
     pub cwd: &'a Path,
+    pub remote_name: Option<&'a str>,
     pub jumps: &'a Jumps,
     pub entries: &'a [Entry],
     pub max_name_width: usize,
@@ -172,7 +177,8 @@ pub fn draw_pane_header(frame: &mut Frame, area: Rect, view: &PaneView<'_>, acti
             Style::default().fg(Color::Rgb(93, 203, 165)),
         ),
         Span::styled(
-            view.cwd.display().to_string(),
+            view.remote_name.map(|name| format!("SFTP · {name}:{}", view.cwd.display()))
+                .unwrap_or_else(|| view.cwd.display().to_string()),
             Style::default().fg(if active {
                 Color::Rgb(218, 226, 236)
             } else {
