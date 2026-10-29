@@ -226,6 +226,14 @@ impl Remote {
         result
     }
 
+    /// Exclusive SFTP empty-file creation; never truncate an existing file.
+    pub fn create_empty_file(&self, path: &Path) -> io::Result<()> {
+        self.rt.block_on(async {
+            let file = self.sftp.options().write(true).create_new(true).open(path).await.map_err(other)?;
+            file.close().await.map_err(other)
+        })
+    }
+
     pub fn mkdir(&self, path: &Path) -> io::Result<()> {
         self.rt.block_on(async { self.sftp.fs().create_dir(path).await.map_err(other) })
     }
