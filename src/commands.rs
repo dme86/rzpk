@@ -13,7 +13,7 @@ use ratatui::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
-    Help, Quit, Command, SwitchPane, Parent, EnterDirectory, Open, Up, Down,
+    Help, Quit, Command, SwitchPane, SwapPanes, Parent, EnterDirectory, Open, Up, Down,
     MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs, JumpPrefix, Jump(u8),
 }
 
@@ -70,6 +70,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "Esc", description: "Clear marks / dismiss a dialog", action: Action::Clear, input: Input::Any(KeyCode::Esc), section: "GENERAL" },
     Binding { label: "Tab", description: "Switch split panes", action: Action::SwitchPane, input: Input::Plain(KeyCode::Tab), section: "NAVIGATION" },
     Binding { label: "Shift+Tab", description: "Switch split panes", action: Action::SwitchPane, input: Input::Any(KeyCode::BackTab), section: "NAVIGATION" },
+    Binding { label: "Shift+S", description: "Swap left and right pane positions", action: Action::SwapPanes, input: Input::ShiftLetter('s'), section: "NAVIGATION" },
     Binding { label: "Up", description: "Previous entry", action: Action::Up, input: Input::Plain(KeyCode::Up), section: "NAVIGATION" },
     Binding { label: "Down", description: "Next entry", action: Action::Down, input: Input::Plain(KeyCode::Down), section: "NAVIGATION" },
     Binding { label: "Enter", description: "Open file in $EDITOR / folder / toggle tree", action: Action::Open, input: Input::Any(KeyCode::Enter), section: "NAVIGATION" },
@@ -92,7 +93,7 @@ pub const BINDINGS: &[Binding] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, Copy, Move, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
+pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, SwapPanes, Copy, Move, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
 
 pub struct Command {
     pub name: &'static str,
@@ -103,6 +104,7 @@ pub struct Command {
 pub const COMMANDS: &[Command] = &[
     Command { name: "q", description: "Exit rzpk", action: CommandAction::Quit },
     Command { name: "v", description: "Toggle vertical split", action: CommandAction::Vertical },
+    Command { name: "swap", description: "Swap left and right pane positions", action: CommandAction::SwapPanes },
     Command { name: "p", description: "Toggle file preview", action: CommandAction::Preview },
     Command { name: "t", description: "Toggle tree view", action: CommandAction::Tree },
     Command { name: "n", description: "Return to normal view", action: CommandAction::Normal },
@@ -212,6 +214,14 @@ mod tests {
                 line.spans.iter().any(|span| span.content.contains(binding.label))
             }), "missing help for {}", binding.label);
         }
+    }
+
+    #[test]
+    fn shift_s_swaps_views_but_plain_s_remains_filename_search() {
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)), None);
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE)), Some(Action::SwapPanes));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::SHIFT)), Some(Action::SwapPanes));
+        assert_eq!(command_for("swap"), Some(CommandAction::SwapPanes));
     }
 
     #[test]
