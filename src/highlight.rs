@@ -123,11 +123,133 @@ fn token_style(token: syntect::highlighting::Style) -> Style {
     style
 }
 
+/// Compact fallback for configuration languages not included in syntect's
+/// bundled Sublime grammars (in particular TOML, Nix and Terraform/HCL).
+/// This deliberately tokenizes only simple keys, strings, numbers and comments;
+/// it never tries to parse/validate the configuration file.
+fn config_language(path: &Path) -> Option<&'static str> {
+    match grammar_extension(path)? {
+        "toml" => Some("TOML"),
+        "nix" => Some("Nix"),
+        "tf" | "tfvars" | "hcl" => Some("HCL"),
+        "env" => Some("Env"),
+        _ => None,
+    }
+}
+
+fn config_comment_at(line: &str, nix: bool) -> Option<usize> {
+    let mut quote = None;
+    let mut escape = false;
+    let mut chars = line.char_indices().peekable();
+    while let Some((index, character)) = chars.next() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if quote.is_some() && character == '\\' {
+            escape = true;
+            continue;
+        }
+        if quote == Some(character) {
+            quote = None;
+        } else if quote.is_none() {
+            if character == '"' || character == '\'' {
+                quote = Some(character);
+            } else if character == '#' || (nix && character == '/' && chars.peek().is_some_and(|(_, ch)| *ch == '/')) {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn push_plain(spans: &mut Vec<Span<'static>>, plain: &mut String) {
+    if !plain.is_empty() {
+        spans.push(Span::styled(std::mem::take(plain), Style::default().fg(TEXT)));
+    }
+}
+
+fn config_value_spans(source: &str, spans: &mut Vec<Span<'static>>) {
+    let mut chars = source.chars().peekable();
+    let mut plain = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '"' || ch == '\'' {
+            push_plain(spans, &mut plain);
+            let mut string = String::from(ch);
+            let mut escaped = false;
+            for next in chars.by_ref() {
+                string.push(next);
+                if escaped {
+                    escaped = false;
+                } else if next == '\\' {
+                    escaped = true;
+                } else if next == ch {
+                    break;
+                }
+            }
+            spans.push(Span::styled(string, Style::default().fg(Color::Rgb(GREEN.0, GREEN.1, GREEN.2))));
+        } else if ch.is_ascii_digit() {
+            push_plain(spans, &mut plain);
+            let mut number = String::from(ch);
+            while chars.peek().is_some_and(|next| next.is_ascii_digit() || *next == '_' || *next == '.') {
+                number.push(chars.next().unwrap());
+            }
+            spans.push(Span::styled(number, Style::default().fg(Color::Rgb(PURPLE.0, PURPLE.1, PURPLE.2))));
+        } else if ch.is_ascii_alphabetic() {
+            let mut word = String::from(ch);
+            while chars.peek().is_some_and(|next| next.is_ascii_alphanumeric() || *next == '_') {
+                word.push(chars.next().unwrap());
+            }
+            if matches!(word.as_str(), "true" | "false" | "null" | "let" | "in" | "with" | "inherit") {
+                push_plain(spans, &mut plain);
+                spans.push(Span::styled(word, Style::default().fg(Color::Rgb(RED.0, RED.1, RED.2))));
+            } else {
+                plain.push_str(&word);
+            }
+        } else {
+            plain.push(ch);
+        }
+    }
+    push_plain(spans, &mut plain);
+}
+
+fn highlight_config(path: &Path, lines: &[String]) -> Option<(String, Vec<Line<'static>>)> {
+    let language = config_language(path)?;
+    let nix = language == "Nix";
+    let output = lines.iter().map(|line| {
+        if line == "… preview truncated" || line == "(empty file)" {
+            return Line::from(Span::styled(line.clone(), Style::default().fg(Color::Rgb(146, 131, 116))));
+        }
+        let (code, comment) = match config_comment_at(line, nix) {
+            Some(index) => (&line[..index], Some(&line[index..])),
+            None => (line.as_str(), None),
+        };
+        let mut spans = Vec::new();
+        if code.trim_start().starts_with('[') && code.trim_end().ends_with(']') {
+            spans.push(Span::styled(code.to_owned(), Style::default().fg(Color::Rgb(YELLOW.0, YELLOW.1, YELLOW.2))));
+        } else if let Some(index) = code.find('=') {
+            let (key, value) = code.split_at(index);
+            spans.push(Span::styled(key.to_owned(), Style::default().fg(Color::Rgb(BLUE.0, BLUE.1, BLUE.2))));
+            config_value_spans(value, &mut spans);
+        } else {
+            config_value_spans(code, &mut spans);
+        }
+        if let Some(comment) = comment {
+            spans.push(Span::styled(comment.to_owned(), Style::default().fg(Color::Rgb(COMMENT.0, COMMENT.1, COMMENT.2)).add_modifier(Modifier::ITALIC)));
+        }
+        Line::from(spans)
+    }).collect();
+    Some((language.to_owned(), output))
+}
+
 pub fn highlight(path: &Path, lines: &[String]) -> Option<(String, Vec<Line<'static>>)> {
     let syntax_set = syntaxes();
     let syntax = grammar_extension(path)
         .and_then(|extension| syntax_set.find_syntax_by_extension(extension))
-        .or_else(|| lines.first().and_then(|line| syntax_set.find_syntax_by_first_line(line)))?;
+        .or_else(|| lines.first().and_then(|line| syntax_set.find_syntax_by_first_line(line)));
+    let Some(syntax) = syntax else {
+        return highlight_config(path, lines);
+    };
     let mut highlighter = HighlightLines::new(syntax, theme());
     let mut styled = Vec::with_capacity(lines.len());
     for line in lines {
@@ -169,6 +291,26 @@ mod tests {
         assert_eq!(spans.iter().map(|span| span.content.as_ref()).collect::<String>(), input[0]);
         let unique = spans.iter().map(|span| span.style.fg).collect::<std::collections::HashSet<_>>();
         assert!(unique.len() > 1, "syntax highlighting must apply multiple colors");
+    }
+
+    #[test]
+    fn toml_fallback_colors_keys_strings_values_and_comments() {
+        let lines = vec!["theme = \"gruvbox#dark\" # comment".to_owned(), "[jumps]".to_owned(), "max = 12".to_owned()];
+        let (language, output) = highlight(Path::new("config.toml"), &lines).unwrap();
+        assert!(!language.is_empty());
+        assert_eq!(output.len(), lines.len());
+        for (line, original) in output.iter().zip(&lines) {
+            assert_eq!(line.spans.iter().map(|span| span.content.as_ref()).collect::<String>(), *original);
+        }
+        let colors = output[0].spans.iter().filter_map(|span| span.style.fg).collect::<std::collections::HashSet<_>>();
+        assert!(colors.len() >= 3);
+    }
+
+    #[test]
+    fn config_fallback_handles_unicode_without_splitting_bytes() {
+        let line = "project = \"München 🍀\" # Grüße".to_owned();
+        let (_, out) = highlight(Path::new("flake.nix"), &[line.clone()]).unwrap();
+        assert_eq!(out[0].spans.iter().map(|span| span.content.as_ref()).collect::<String>(), line);
     }
 
     #[test]
