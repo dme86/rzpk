@@ -3663,6 +3663,61 @@ mod tests {
     }
 
     #[test]
+    fn new_dialog_creates_nested_project_tree_and_keeps_other_pane() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.toggle_vertical_split()?;
+        app.handle_key(key(KeyCode::Char('N'), KeyModifiers::SHIFT));
+        assert!(app.create_dialog.is_some());
+        for ch in "China".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
+        for ch in "Fotos/Originale, Videos, Dokumente".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.job.is_none(), "first Enter should only validate and preview");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.create_dialog.is_none());
+        complete_job(&mut app)?;
+        assert!(root.join("China/Fotos/Originale").is_dir());
+        assert!(root.join("China/Videos").is_dir());
+        assert!(root.join("China/Dokumente").is_dir());
+        assert_eq!(app.other.as_ref().unwrap().cwd, root);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_command_creates_empty_file_and_cancel_is_safe() -> io::Result<()> {
+        let root = split_fixture()?;
+        let mut app = app(read_directory(&root)?);
+        app.cwd = root.clone();
+        app.handle_key(key(KeyCode::Char(':'), KeyModifiers::SHIFT));
+        for ch in "file".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.create_dialog.is_some());
+        for ch in "readme.md".chars() {
+            app.handle_key(key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(!root.join("readme.md").exists());
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        complete_job(&mut app)?;
+        assert_eq!(fs::read(root.join("readme.md"))?, b"");
+        app.handle_key(key(KeyCode::Char('N'), KeyModifiers::SHIFT));
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.create_dialog.is_none());
+        assert!(app.job.is_none());
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
     fn no_match_does_not_move_selection() {
         let mut app = app(vec![sample("Cargo.toml", false), sample("src", true)]);
         app.selected = 1;
