@@ -12,3 +12,55 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --all-targets
       - run: cargo clippy --all-targets -- -D warnings
+  sftp-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Start isolated SFTP server
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
+          mkdir -p "$HOME/.ssh" "$RUNNER_TEMP/sftp-root"
+          chmod 700 "$HOME/.ssh"
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/rzpk-client-key"
+          ssh-keygen -q -t ed25519 -N '' -f "$RUNNER_TEMP/rzpk-host-key"
+          cat "$RUNNER_TEMP/rzpk-client-key.pub" >> "$HOME/.ssh/authorized_keys"
+          chmod 600 "$HOME/.ssh/authorized_keys"
+          printf '[127.0.0.1]:22222 %s\n' "$(cat "$RUNNER_TEMP/rzpk-host-key.pub")" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          cat > "$RUNNER_TEMP/rzpk-sshd.conf" <<EOF
+          Port 22222
+          ListenAddress 127.0.0.1
+          HostKey $RUNNER_TEMP/rzpk-host-key
+          PidFile $RUNNER_TEMP/rzpk-sshd.pid
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          AuthorizedKeysFile .ssh/authorized_keys
+          UsePAM no
+          PermitRootLogin no
+          Subsystem sftp internal-sftp
+          LogLevel VERBOSE
+          EOF
+          sudo mkdir -p /run/sshd
+          sudo /usr/sbin/sshd -f "$RUNNER_TEMP/rzpk-sshd.conf" -E "$RUNNER_TEMP/rzpk-sshd.log"
+          cat >> "$HOME/.ssh/config" <<EOF
+          Host rzpk-ci
+            HostName 127.0.0.1
+            User $(whoami)
+            Port 22222
+            IdentityFile $RUNNER_TEMP/rzpk-client-key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile $HOME/.ssh/known_hosts
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+          ssh -o ConnectTimeout=5 rzpk-ci true
+      - name: Test nested upload and download via SFTP
+        env:
+          RZPK_TEST_SFTP_HOST: rzpk-ci
+          RZPK_TEST_SFTP_DIR: ${{ runner.temp }}/sftp-root
+        run: cargo test real_sftp_roundtrip_when_test_server_is_available -- --nocapture
