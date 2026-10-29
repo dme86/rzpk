@@ -190,6 +190,67 @@ impl Remote {
         })
     }
 
+    /// A remote editor only downloads a bounded text file and records the
+    /// original metadata to detect concurrent modifications before upload.
+    pub fn edit_snapshot(&self, path: &Path) -> io::Result<(Vec<u8>, EditStamp)> {
+        const MAX_EDIT_BYTES: usize = 8 * 1024 * 1024;
+        let stamp = self.edit_stamp(path)?;
+        if stamp.size.is_some_and(|size| size > MAX_EDIT_BYTES as u64) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
+        }
+        let data = self.rt.block_on(async {
+            let mut input = self.sftp.open(path).await.map_err(other)?;
+            input.read_all(MAX_EDIT_BYTES + 1, BytesMut::new()).await.map_err(other)
+        })?;
+        if data.len() > MAX_EDIT_BYTES {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
+        }
+        Ok((data.to_vec(), stamp))
+    }
+
+    pub fn edit_stamp(&self, path: &Path) -> io::Result<EditStamp> {
+        self.rt.block_on(async {
+            let meta = self.sftp.fs().symlink_metadata(path).await.map_err(other)?;
+            if !meta.file_type().is_some_and(|t| t.is_file()) {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Not a regular remote file"));
+            }
+            Ok(EditStamp {
+                size: meta.len(),
+                modified: format!("{:?}", meta.modified()),
+            })
+        })
+    }
+
+    pub fn save_edit(&self, source: &Path, target: &Path, expected: &EditStamp) -> io::Result<()> {
+        if self.edit_stamp(target)? != *expected {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                "Remote file changed since it was opened; refusing to overwrite"));
+        }
+        // A private, uniquely named remote temporary file keeps a failed upload
+        // from corrupting the original file.
+        let name = target.file_name().ok_or_else(|| io::Error::other("Invalid remote filename"))?;
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let temp = target.with_file_name(format!(
+            ".{}.rzpk-{}-{suffix}.tmp", name.to_string_lossy(), std::process::id()));
+        let progress = Arc::new(Progress::new());
+        self.upload(source, &temp, &progress)?;
+        let result = self.rt.block_on(async {
+            // Check once again just before commit. SFTP has no compare-and-swap,
+            // so another client can still race this check and the rename.
+            let meta = self.sftp.fs().symlink_metadata(target).await.map_err(other)?;
+            let current = EditStamp { size: meta.len(), modified: format!("{:?}", meta.modified()) };
+            if current != *expected {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Remote file changed while editing"));
+            }
+            self.sftp.fs().rename(&temp, target).await.map_err(other)
+        });
+        if result.is_err() {
+            let _ = self.remove_file(&temp);
+        }
+        result
+    }
+
     pub fn mkdir(&self, path: &Path) -> io::Result<()> {
         self.rt.block_on(async { self.sftp.fs().create_dir(path).await.map_err(other) })
     }
@@ -211,6 +272,33 @@ impl Remote {
     }
 
     pub fn home(&self) -> &Path { &self.root }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditStamp {
+    pub size: Option<u64>,
+    pub modified: String,
+}
+
+pub struct RemoteSave {
+    pub remote: Arc<Remote>,
+    pub target: PathBuf,
+    pub local: PathBuf,
+    pub tempdir: tempfile::TempDir,
+    pub expected: EditStamp,
+}
+
+impl RemoteSave {
+    pub fn execute(self) -> io::Result<String> {
+        let result = self.remote.save_edit(&self.local, &self.target, &self.expected);
+        match result {
+            Ok(()) => Ok(format!("Saved remote file {}", self.target.display())),
+            Err(error) => {
+                let kept = self.tempdir.keep();
+                Err(io::Error::other(format!("{error} · Edited copy preserved: {}", kept.display())))
+            }
+        }
+    }
 }
 
 /// Snapshot of one local↔SFTP transfer. Sources are never interpreted as local
