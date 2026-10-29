@@ -1950,6 +1950,7 @@ mod tests {
             active_right: false,
             pending_transfer: None,
             pending_remote_transfer: None,
+            rename_dialog: None,
             status: None,
             pending_archive: None,
             help_open: false,
