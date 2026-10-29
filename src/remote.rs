@@ -182,6 +182,9 @@ impl Remote {
         self.rt.block_on(async {
             let meta = self.sftp.fs().symlink_metadata(path).await.map_err(other)?;
             let kind = meta.file_type();
+            if !kind.is_some_and(|t| t.is_file() || t.is_dir() || t.is_symlink()) {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported remote file type"));
+            }
             Ok((
                 kind.is_some_and(|t| t.is_dir()),
                 kind.is_some_and(|t| t.is_symlink()),
@@ -251,6 +254,9 @@ impl RemoteTransfer {
             remote.stat_type(path)
         } else {
             let meta = fs::symlink_metadata(path)?;
+            if !meta.is_dir() && !meta.is_file() && !meta.file_type().is_symlink() {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported local file type"));
+            }
             Ok((meta.is_dir(), meta.file_type().is_symlink(), Some(meta.len())))
         }
     }
