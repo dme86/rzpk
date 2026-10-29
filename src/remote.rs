@@ -17,7 +17,6 @@ pub const MAX_PREVIEW: usize = 24 * 1024;
 
 pub struct Remote {
     pub name: String,
-    pub hostname: String,
     pub root: PathBuf,
     rt: Runtime,
     sftp: Sftp,
@@ -71,7 +70,7 @@ impl Remote {
             let ssh = Session::connect(&hostname, KnownHosts::Strict).await.map_err(other)?;
             Sftp::from_session(ssh, SftpOptions::default()).await.map_err(other)
         })?;
-        let remote = Arc::new(Self { name, hostname, root, rt, sftp });
+        let remote = Arc::new(Self { name, root, rt, sftp });
         // Establish the initial directory rather than accepting an unusable connection.
         remote.list(&remote.root)?;
         Ok(remote)
@@ -107,7 +106,7 @@ impl Remote {
             Ok::<_, io::Error>(rows)
         })?;
         let mut entries = entries;
-        entries.sort_by(|a, b| (!a.is_dir, a.name.to_lowercase()).cmp(&(!b.is_dir, b.name.to_lowercase())));
+        entries.sort_by_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
         Ok(entries)
     }
 
@@ -171,86 +170,6 @@ impl Remote {
         })
     }
 
-    pub fn exists(&self, path: &Path) -> io::Result<bool> {
-        self.rt.block_on(async {
-            match self.sftp.fs().symlink_metadata(path).await {
-                Ok(_) => Ok(true),
-                Err(error) => {
-                    // Avoid treating permission/connection failures as "missing".
-                    // SFTP errors are not a std::io::ErrorKind, so conservatively
-                    // let create_new() enforce no overwrite on upload.
-                    let message = error.to_string();
-                    if message.contains("No such file") || message.contains("SSH_FX_NO_SUCH_FILE") {
-                        Ok(false)
-                    } else {
-                        Err(other(error))
-                    }
-                }
-            }
-        })
-    }
-
-    /// A remote editor only downloads a bounded text file and records the
-    /// original metadata to detect concurrent modifications before upload.
-    pub fn edit_snapshot(&self, path: &Path) -> io::Result<(Vec<u8>, EditStamp)> {
-        const MAX_EDIT_BYTES: usize = 8 * 1024 * 1024;
-        let stamp = self.edit_stamp(path)?;
-        if stamp.size.is_some_and(|size| size > MAX_EDIT_BYTES as u64) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
-        }
-        let data = self.rt.block_on(async {
-            let mut input = self.sftp.open(path).await.map_err(other)?;
-            input.read_all(MAX_EDIT_BYTES + 1, BytesMut::new()).await.map_err(other)
-        })?;
-        if data.len() > MAX_EDIT_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
-        }
-        Ok((data.to_vec(), stamp))
-    }
-
-    pub fn edit_stamp(&self, path: &Path) -> io::Result<EditStamp> {
-        self.rt.block_on(async {
-            let meta = self.sftp.fs().symlink_metadata(path).await.map_err(other)?;
-            if !meta.file_type().is_some_and(|t| t.is_file()) {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Not a regular remote file"));
-            }
-            Ok(EditStamp {
-                size: meta.len(),
-                modified: format!("{:?}", meta.modified()),
-            })
-        })
-    }
-
-    pub fn save_edit(&self, source: &Path, target: &Path, expected: &EditStamp) -> io::Result<()> {
-        if self.edit_stamp(target)? != *expected {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
-                "Remote file changed since it was opened; refusing to overwrite"));
-        }
-        // A private, uniquely named remote temporary file keeps a failed upload
-        // from corrupting the original file.
-        let name = target.file_name().ok_or_else(|| io::Error::other("Invalid remote filename"))?;
-        let suffix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-        let temp = target.with_file_name(format!(
-            ".{}.rzpk-{}-{suffix}.tmp", name.to_string_lossy(), std::process::id()));
-        let progress = Arc::new(Progress::new());
-        self.upload(source, &temp, &progress)?;
-        let result = self.rt.block_on(async {
-            // Check once again just before commit. SFTP has no compare-and-swap,
-            // so another client can still race this check and the rename.
-            let meta = self.sftp.fs().symlink_metadata(target).await.map_err(other)?;
-            let current = EditStamp { size: meta.len(), modified: format!("{:?}", meta.modified()) };
-            if current != *expected {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Remote file changed while editing"));
-            }
-            self.sftp.fs().rename(&temp, target).await.map_err(other)
-        });
-        if result.is_err() {
-            let _ = self.remove_file(&temp);
-        }
-        result
-    }
-
     pub fn mkdir(&self, path: &Path) -> io::Result<()> {
         self.rt.block_on(async { self.sftp.fs().create_dir(path).await.map_err(other) })
     }
@@ -271,7 +190,6 @@ impl Remote {
         })
     }
 
-    pub fn home(&self) -> &Path { &self.root }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
