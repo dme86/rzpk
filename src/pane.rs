@@ -80,7 +80,7 @@ impl PaneState {
             scroll: &mut self.scroll,
             typed: &self.typed,
             error: self.error.as_deref(),
-            preview: self.preview.as_ref(),
+            preview: self.preview.as_mut(),
             tree_rows: self.tree.as_ref().map(|tree| tree.rows.as_slice()),
         }
     }
@@ -158,7 +158,7 @@ pub struct PaneView<'a> {
     pub scroll: &'a mut usize,
     pub typed: &'a str,
     pub error: Option<&'a str>,
-    pub preview: Option<&'a Preview>,
+    pub preview: Option<&'a mut Preview>,
     pub tree_rows: Option<&'a [TreeRow]>,
 }
 
@@ -386,7 +386,7 @@ pub fn draw_pane_content(
     }
     draw_entries(frame, list, view, metadata_position, active);
     if let Some(preview_area) = preview_area {
-        draw_preview(frame, preview_area, view.preview);
+        draw_preview(frame, preview_area, view.preview.as_deref_mut());
     }
 }
 
