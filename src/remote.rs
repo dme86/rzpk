@@ -170,6 +170,56 @@ impl Remote {
         })
     }
 
+    pub fn edit_stamp(&self, path: &Path) -> io::Result<EditStamp> {
+        self.rt.block_on(async {
+            let meta = self.sftp.fs().symlink_metadata(path).await.map_err(other)?;
+            if !meta.file_type().is_some_and(|kind| kind.is_file()) {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "Not a regular remote file"));
+            }
+            Ok(EditStamp { size: meta.len(), modified: format!("{:?}", meta.modified()) })
+        })
+    }
+
+    pub fn edit_snapshot(&self, path: &Path) -> io::Result<(Vec<u8>, EditStamp)> {
+        const MAX_EDIT: usize = 8 * 1024 * 1024;
+        let stamp = self.edit_stamp(path)?;
+        if stamp.size.is_some_and(|size| size > MAX_EDIT as u64) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
+        }
+        let data = self.rt.block_on(async {
+            let mut file = self.sftp.open(path).await.map_err(other)?;
+            file.read_all(MAX_EDIT + 1, BytesMut::new()).await.map_err(other)
+        })?;
+        if data.len() > MAX_EDIT {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Remote edit exceeds 8 MiB"));
+        }
+        Ok((data.to_vec(), stamp))
+    }
+
+    pub fn save_edit(&self, local: &Path, remote_path: &Path, expected: &EditStamp) -> io::Result<()> {
+        if self.edit_stamp(remote_path)? != *expected {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists,
+                "Remote file changed since editing began; refusing overwrite"));
+        }
+        let name = remote_path.file_name().ok_or_else(|| io::Error::other("Invalid remote filename"))?;
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let staging = remote_path.with_file_name(format!(
+            ".{}.rzpk-{}-{suffix}.tmp", name.to_string_lossy(), std::process::id()));
+        let progress = Arc::new(Progress::new());
+        self.upload(local, &staging, &progress)?;
+        let result = self.rt.block_on(async {
+            let meta = self.sftp.fs().symlink_metadata(remote_path).await.map_err(other)?;
+            let current = EditStamp { size: meta.len(), modified: format!("{:?}", meta.modified()) };
+            if current != *expected {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "Remote file changed during upload"));
+            }
+            self.sftp.fs().rename(&staging, remote_path).await.map_err(other)
+        });
+        if result.is_err() { let _ = self.remove_file(&staging); }
+        result
+    }
+
     pub fn mkdir(&self, path: &Path) -> io::Result<()> {
         self.rt.block_on(async { self.sftp.fs().create_dir(path).await.map_err(other) })
     }
