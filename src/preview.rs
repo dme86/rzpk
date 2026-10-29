@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::Entry;
+use crate::{Entry, highlight};
 
 const MAX_BYTES: u64 = 24 * 1024;
 const MAX_LINES: usize = 120;
@@ -25,6 +25,8 @@ const GRUVBOX_AQUA: Color = Color::Rgb(142, 192, 124);
 pub struct Preview {
     pub title: String,
     pub lines: Vec<String>,
+    pub syntax: Option<String>,
+    pub styled_lines: Option<Vec<Line<'static>>>,
 }
 
 impl Preview {
@@ -48,7 +50,20 @@ impl Preview {
         } else {
             vec!["(not a regular file — no text preview)".to_string()]
         };
-        Self { title, lines }
+        let highlighted = if !entry.is_symlink && !entry.is_dir
+            && !lines.first().is_some_and(|line| {
+                line.starts_with("(binary") || line.starts_with("Cannot ") || line.starts_with("(not a regular")
+            })
+        {
+            highlight::highlight(&entry.path, &lines)
+        } else {
+            None
+        };
+        let (syntax, styled_lines) = match highlighted {
+            Some((syntax, styled_lines)) => (Some(syntax), Some(styled_lines)),
+            None => (None, None),
+        };
+        Self { title, lines, syntax, styled_lines }
     }
 }
 
@@ -142,7 +157,12 @@ pub fn draw_preview(frame: &mut Frame, area: Rect, preview: Option<&Preview>) {
         return;
     }
     let title = preview
-        .map(|preview| format!(" PREVIEW · {} ", preview.title))
+        .map(|preview| {
+            let syntax = preview.syntax.as_deref()
+                .map(|name| format!(" · {name}"))
+                .unwrap_or_default();
+            format!(" PREVIEW · {}{syntax} ", preview.title)
+        })
         .unwrap_or_else(|| " PREVIEW ".to_string());
     let block = Block::default()
         .title(Span::styled(
@@ -155,6 +175,9 @@ pub fn draw_preview(frame: &mut Frame, area: Rect, preview: Option<&Preview>) {
         .border_style(Style::default().fg(Color::Rgb(80, 73, 69)));
     let lines = preview
         .map(|preview| {
+            if let Some(lines) = &preview.styled_lines {
+                return lines.clone();
+            }
             preview.lines.iter().map(|line| {
                 let color = if line.starts_with('▸') {
                     GRUVBOX_AQUA
@@ -188,6 +211,28 @@ mod tests {
         let file = root.join("hello.rs");
         fs::write(&file, "fn main() {}\n// hello\n").unwrap();
         assert_eq!(file_preview(&file)[0], "fn main() {}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rust_preview_has_cached_gruvbox_tokens() {
+        let root = fixture();
+        let file = root.join("hello.rs");
+        fs::write(&file, "fn main() { println!(\"Hello\"); }\\n").unwrap();
+        let entry = Entry {
+            path: file,
+            name: "hello.rs".to_owned(),
+            name_key: "hello.rs".to_owned(),
+            is_dir: false,
+            is_symlink: false,
+            permissions: String::new(),
+            size: None,
+            modified: None,
+        };
+        let preview = Preview::selected(&[entry], 0).unwrap();
+        assert!(preview.syntax.is_some());
+        assert_eq!(preview.styled_lines.as_ref().unwrap().len(), preview.lines.len());
+        assert!(preview.styled_lines.unwrap()[0].spans.len() > 1);
         fs::remove_dir_all(root).unwrap();
     }
 
