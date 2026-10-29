@@ -1170,6 +1170,34 @@ impl App {
         }
     }
 
+    fn edit_remote_file(&mut self, terminal: &mut DefaultTerminal, path: &Path) -> io::Result<()> {
+        let remote = self.remote.as_ref().ok_or_else(|| io::Error::other("Not an SFTP pane"))?.clone();
+        let (original, expected) = remote.edit_snapshot(path)?;
+        let dir = tempfile::Builder::new().prefix("rzpk-remote-edit-").tempdir()?;
+        let filename = path.file_name().ok_or_else(|| io::Error::other("Missing remote filename"))?;
+        let local = dir.path().join(filename);
+        fs::write(&local, &original)?;
+        // $EDITOR uses the real terminal. The temporary file is named after
+        // the original so syntax detection in nvim/vi continues to work.
+        if let Err(error) = launch_editor(terminal, &local) {
+            let kept = dir.keep();
+            return Err(io::Error::other(format!("{error} · Local copy: {}", kept.display())));
+        }
+        if fs::read(&local)? == original {
+            self.status = Some("Remote edit unchanged".to_owned());
+            return Ok(());
+        }
+        self.begin_work(Work::RemoteSave(remote::RemoteSave {
+            remote,
+            target: path.to_path_buf(),
+            local,
+            tempdir: dir,
+            expected,
+        }));
+        self.status = Some("Queued remote save".to_owned());
+        Ok(())
+    }
+
     fn connect_profile(&mut self, name: &str) {
         if self.pending_connect.is_some() {
             self.error = Some("An SSH connection is already being established".to_owned());
@@ -1732,7 +1760,12 @@ impl App {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         self.handle_key(key);
                         if let Some(path) = self.pending_edit.take() {
-                            match launch_editor(terminal, &path) {
+                            let edited = if self.remote.is_some() {
+                                self.edit_remote_file(terminal, &path)
+                            } else {
+                                launch_editor(terminal, &path)
+                            };
+                            match edited {
                                 Ok(()) => {
                                     if let Err(error) = self.refresh_after_transfer() {
                                         self.error = Some(format!("Cannot refresh after editing: {error}"));
