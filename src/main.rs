@@ -1,6 +1,7 @@
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
+    sync::{Arc, mpsc::{self, Receiver}},
     process::Command,
     time::{Duration, Instant, SystemTime},
 };
@@ -35,6 +36,7 @@ use render::maximum_name_width;
 use pane::{PaneState, PaneView, draw_pane_content, draw_split_pane, use_two_columns};
 use preview::Preview;
 use queue::WorkQueue;
+use remote::Remote;
 use tree::{RowKind, TreeState};
 use selection::Selection;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -224,6 +226,8 @@ struct App {
     preview: Option<Preview>,
     tree_mode: bool,
     tree: Option<TreeState>,
+    remote: Option<Arc<Remote>>,
+    pending_connect: Option<(bool, Receiver<io::Result<Arc<Remote>>>)>,
     other: Option<PaneState>,
     active_right: bool,
     pending_transfer: Option<Transfer>,
@@ -270,6 +274,8 @@ impl App {
             preview: None,
             tree_mode: false,
             tree: None,
+            remote: None,
+            pending_connect: None,
             other: None,
             active_right: false,
             pending_transfer: None,
@@ -569,6 +575,7 @@ impl App {
         std::mem::swap(&mut self.error, &mut other.error);
         std::mem::swap(&mut self.preview, &mut other.preview);
         std::mem::swap(&mut self.tree, &mut other.tree);
+        std::mem::swap(&mut self.remote, &mut other.remote);
         self.active_right = !self.active_right;
     }
 
@@ -1474,6 +1481,7 @@ impl App {
 
         let mut current = PaneView {
             cwd: &self.cwd,
+            remote_name: self.remote.as_ref().map(|remote| remote.name.as_str()),
             jumps: &self.jumps,
             entries: &self.entries,
             max_name_width: self.max_name_width,
