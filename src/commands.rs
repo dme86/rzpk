@@ -14,7 +14,7 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Help, Quit, Command, SwitchPane, SwapPanes, Parent, EnterDirectory, Open, Up, Down,
-    MarkUp, MarkDown, Mark, SelectAll, Clear, Copy, Move, BatchRename, Archive, Extract, Jobs, JumpPrefix, Jump(u8),
+    MarkUp, MarkDown, Mark, SelectAll, Clear, Copy, Move, BatchRename, New, Archive, Extract, Jobs, JumpPrefix, Jump(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -89,13 +89,14 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "Shift+C", description: "Copy to other pane", action: Action::Copy, input: Input::ShiftLetter('c'), section: "FILES" },
     Binding { label: "Shift+M", description: "Move to other pane", action: Action::Move, input: Input::ShiftLetter('m'), section: "FILES" },
     Binding { label: "Shift+R", description: "Batch rename selected files with numbering", action: Action::BatchRename, input: Input::ShiftLetter('r'), section: "FILES" },
+    Binding { label: "Shift+N", description: "Create a new file or folder (with optional subfolders)", action: Action::New, input: Input::ShiftLetter('n'), section: "FILES" },
     Binding { label: "Shift+A", description: "Create a .tar.gz archive", action: Action::Archive, input: Input::ShiftLetter('a'), section: "FILES" },
     Binding { label: "Shift+E", description: "Extract the selected archive", action: Action::Extract, input: Input::ShiftLetter('e'), section: "FILES" },
     Binding { label: "Shift+Q", description: "Open the job queue (Del removes waiting jobs)", action: Action::Jobs, input: Input::ShiftLetter('q'), section: "FILES" },
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, SwapPanes, Disconnect, Connections, Refresh, Copy, Move, BatchRename, SelectAll, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
+pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, SwapPanes, Disconnect, Connections, Refresh, Copy, Move, BatchRename, SelectAll, New, NewFile, NewFolder, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
 
 pub struct Command {
     pub name: &'static str,
@@ -117,6 +118,9 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "cp", description: "Copy to other pane", action: CommandAction::Copy },
     Command { name: "mv", description: "Move to other pane", action: CommandAction::Move },
     Command { name: "rename", description: "Batch rename selected files", action: CommandAction::BatchRename },
+    Command { name: "new", description: "Create a new file or folder", action: CommandAction::New },
+    Command { name: "file", description: "Create an empty file", action: CommandAction::NewFile },
+    Command { name: "folder", description: "Create a folder (with optional subfolders)", action: CommandAction::NewFolder },
     Command { name: "all", description: "Select all regular files in the current directory", action: CommandAction::SelectAll },
     Command { name: "archive", description: "Create a .tar.gz archive", action: CommandAction::Archive },
     Command { name: "extract", description: "Extract selected archive", action: CommandAction::Extract },
@@ -222,6 +226,15 @@ mod tests {
                 line.spans.iter().any(|span| span.content.contains(binding.label))
             }), "missing help for {}", binding.label);
         }
+    }
+
+    #[test]
+    fn create_dialog_shortcuts_work_and_do_not_shadow_filename_search() {
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT)), Some(Action::New));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)), None);
+        assert_eq!(command_for("new"), Some(CommandAction::New));
+        assert_eq!(command_for("file"), Some(CommandAction::NewFile));
+        assert_eq!(command_for("folder"), Some(CommandAction::NewFolder));
     }
 
     #[test]
