@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn config_fallback_handles_unicode_without_splitting_bytes() {
         let line = "project = \"München 🍀\" # Grüße".to_owned();
-        let (_, out) = highlight(Path::new("flake.nix"), &[line.clone()]).unwrap();
+        let (_, out) = highlight(Path::new("flake.nix"), std::slice::from_ref(&line)).unwrap();
         assert_eq!(out[0].spans.iter().map(|span| span.content.as_ref()).collect::<String>(), line);
     }
 
