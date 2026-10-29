@@ -93,7 +93,7 @@ pub const BINDINGS: &[Binding] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, SwapPanes, Copy, Move, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
+pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, SwapPanes, Disconnect, Connections, Refresh, Copy, Move, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
 
 pub struct Command {
     pub name: &'static str,
@@ -105,6 +105,10 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "q", description: "Exit rzpk", action: CommandAction::Quit },
     Command { name: "v", description: "Toggle vertical split", action: CommandAction::Vertical },
     Command { name: "swap", description: "Swap left and right pane positions", action: CommandAction::SwapPanes },
+    Command { name: "connect NAME", description: "Open configured SFTP connection in active pane", action: CommandAction::Connections },
+    Command { name: "connections", description: "List available named SFTP profiles", action: CommandAction::Connections },
+    Command { name: "disconnect", description: "Disconnect active SFTP pane", action: CommandAction::Disconnect },
+    Command { name: "refresh", description: "Reload active directory", action: CommandAction::Refresh },
     Command { name: "p", description: "Toggle file preview", action: CommandAction::Preview },
     Command { name: "t", description: "Toggle tree view", action: CommandAction::Tree },
     Command { name: "n", description: "Return to normal view", action: CommandAction::Normal },
