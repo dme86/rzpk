@@ -82,15 +82,21 @@ Type `:v` again to close the split and retain the left pane. On a terminal narro
 The modes are independent and can be combined:
 
 - `:v` toggles a vertical split with two independent directory views, indicated by **[v]** in muted Gruvbox blue.
-- `:p` toggles a preview of the highlighted item, indicated by **[p]** in Gruvbox yellow. It shows bounded UTF-8 text previews, directory contents, and symlink targets; binary files show a placeholder.
+- `:p` toggles a preview of the highlighted item, indicated by **[p]** in Gruvbox yellow. It shows bounded UTF-8 text previews, directory contents, symlink targets and raster images. Unsupported binary formats retain a placeholder.
 - `:t` toggles a **lazy tree** (Gruvbox green). The first two levels open automatically, with a budget of 6 auto-expanded branches per pane. `Enter` expands/collapses a highlighted folder, and `… more entries (Enter)` reveals additional entries.
 - `:v` together with `:p` enables a **separate preview in each pane**, updated by that pane's cursor and navigation.
-- Modes share a single neutral-gray label, e.g. `rzpk [v, p, t]`: only the letters are colored (blue, yellow and green).
+- Modes share a single neutral-gray label, e.g. `rzpk [v,p,t]`: only the letters are colored (blue, yellow and green).
 - `:n` returns to the normal single-list view, removing all modes and keeping the left pane's directory.
 
 `Esc` **never disables a mode**. It cancels an active command or clears marks in the active pane. `:v` / `:p` / `:t` turn off their respective modes without affecting the others. `:n` is the explicit reset.
 
-Previews adapt to terminal size: beside the list in wide panes, below it in narrower ones, and temporarily hidden in extremely small windows. Only the first 24 KiB / 120 lines of a file, or up to 60 directory entries, are read. No preview files are accessed during rendering.
+Previews adapt to terminal size: beside the list in wide panes, below it in narrower ones, and temporarily hidden in extremely small windows. Text previews read at most 24 KiB / 120 lines; directory previews list up to 60 entries. No file I/O occurs during rendering.
+
+### Image previews
+
+When `:p` is enabled, highlighting an image displays it **inside the preview pane**. Supported formats are PNG, JPEG, GIF (first frame), WebP and BMP. The preview title identifies image format and dimensions. Images are fitted to the available pane, retaining aspect ratio; resizing and terminal-protocol encoding run on a worker thread so the TUI can continue redrawing. Normal view, `:v` split view, `:t` tree view and terminal resizing are supported.
+
+rzpk detects terminal graphics support when entering its alternate screen using [ratatui-image](https://github.com/ratatui/ratatui-image): Kitty, iTerm2 or Sixel graphics on terminals that support them, otherwise a **truecolor Unicode half-block** image that works in Alacritty and other ordinary terminals. No additional external viewer or executable is needed. Image files are checked before decoding: a preview is rejected if the file exceeds **20 MiB** or its dimensions exceed **12 million pixels**, avoiding accidental large allocations. Invalid, unsupported or oversized images display an explanatory message without stopping the browser. SVG is not currently rasterized.
 
 ### Gruvbox syntax colors
 
