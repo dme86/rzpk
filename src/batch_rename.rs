@@ -41,6 +41,17 @@ pub fn validate_prefix(prefix: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub fn proposed_name(source: &Path, prefix: &str, number: u32, digits: usize) -> OsString {
+    let suffix = source.extension().map(|ext| {
+        let mut s = OsString::from(".");
+        s.push(ext);
+        s
+    }).unwrap_or_default();
+    let mut name = OsString::from(format!("{prefix}_{number:0digits$}"));
+    name.push(suffix);
+    name
+}
+
 impl BatchRename {
     pub fn build(mut sources: Vec<PathBuf>, prefix: &str, start: u32, digits: usize) -> io::Result<Self> {
         validate_prefix(prefix)?;
@@ -66,15 +77,8 @@ impl BatchRename {
             if !file_type.is_file() {
                 return Err(invalid(format!("Not a regular file: {}", source.display())));
             }
-            let suffix = source.extension().map(|ext| {
-                let mut s = OsString::from(".");
-                s.push(ext);
-                s
-            }).unwrap_or_default();
             let number = start + position as u32;
-            let mut filename = OsString::from(format!("{prefix}_{number:0digits$}"));
-            filename.push(suffix);
-            let destination = folder.join(filename);
+            let destination = folder.join(proposed_name(&source, prefix, number, digits));
             if !seen_dst.insert(destination.clone()) {
                 return Err(invalid(format!("Duplicate destination: {}", destination.display())));
             }
