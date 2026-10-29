@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{archive::ArchiveJob, fileops::{Transfer, TransferKind}};
+use crate::{archive::ArchiveJob, fileops::{Transfer, TransferKind}, remote::RemoteTransfer};
 
 #[derive(Debug)]
 pub struct Progress {
@@ -146,6 +146,7 @@ impl<W: Write> Write for TrackedWriter<W> {
 pub enum Work {
     Transfer(Transfer),
     Archive(ArchiveJob),
+    Remote(RemoteTransfer),
 }
 
 impl Work {
@@ -157,6 +158,10 @@ impl Work {
             },
             Self::Archive(ArchiveJob::Pack { .. }) => "Packing",
             Self::Archive(ArchiveJob::Unpack { .. }) => "Extracting",
+            Self::Remote(job) => match job.kind {
+                TransferKind::Copy => "SFTP copying",
+                TransferKind::Move => "SFTP moving",
+            },
         }
     }
 
@@ -174,6 +179,7 @@ impl Work {
                 };
                 format!("{verb} {items} → {}", transfer.destination.display())
             }
+            Self::Remote(job) => job.description(),
             Self::Archive(archive) => match archive {
                 ArchiveJob::Pack { sources, target } => format!(
                     "Pack {} item(s) → {}",
@@ -220,6 +226,7 @@ impl RunningJob {
                             .map(|count| format!("{} {count} item(s)", kind.past_tense()))
                     }
                     Work::Archive(job) => job.execute_with_progress(&worker_progress),
+                    Work::Remote(job) => job.execute(&worker_progress),
                 };
                 let _ = tx.send(result);
             })?;
