@@ -14,7 +14,7 @@ use ratatui::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Action {
     Help, Quit, Command, SwitchPane, SwapPanes, Parent, EnterDirectory, Open, Up, Down,
-    MarkUp, MarkDown, Mark, Clear, Copy, Move, Archive, Extract, Jobs, JumpPrefix, Jump(u8),
+    MarkUp, MarkDown, Mark, SelectAll, Clear, Copy, Move, BatchRename, Archive, Extract, Jobs, JumpPrefix, Jump(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -85,15 +85,17 @@ pub const BINDINGS: &[Binding] = &[
     Binding { label: "Shift+J", description: "Extend selection downward", action: Action::MarkDown, input: Input::ShiftLetter('j'), section: "SELECTION" },
     Binding { label: "Shift+K", description: "Extend selection upward", action: Action::MarkUp, input: Input::ShiftLetter('k'), section: "SELECTION" },
     Binding { label: "Space", description: "Toggle focused item mark", action: Action::Mark, input: Input::Literal(' '), section: "SELECTION" },
+    Binding { label: "Ctrl+A", description: "Select all files (press again to clear)", action: Action::SelectAll, input: Input::CtrlLetter('a'), section: "SELECTION" },
     Binding { label: "Shift+C", description: "Copy to other pane", action: Action::Copy, input: Input::ShiftLetter('c'), section: "FILES" },
     Binding { label: "Shift+M", description: "Move to other pane", action: Action::Move, input: Input::ShiftLetter('m'), section: "FILES" },
+    Binding { label: "Shift+R", description: "Batch rename selected files with numbering", action: Action::BatchRename, input: Input::ShiftLetter('r'), section: "FILES" },
     Binding { label: "Shift+A", description: "Create a .tar.gz archive", action: Action::Archive, input: Input::ShiftLetter('a'), section: "FILES" },
     Binding { label: "Shift+E", description: "Extract the selected archive", action: Action::Extract, input: Input::ShiftLetter('e'), section: "FILES" },
     Binding { label: "Shift+Q", description: "Open the job queue (Del removes waiting jobs)", action: Action::Jobs, input: Input::ShiftLetter('q'), section: "FILES" },
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, SwapPanes, Disconnect, Connections, Refresh, Copy, Move, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
+pub enum CommandAction { Quit, Vertical, Preview, Tree, Normal, SwapPanes, Disconnect, Connections, Refresh, Copy, Move, BatchRename, SelectAll, Archive, Extract, Jobs, Keys, Jump(u8), JumpSet(u8), JumpDelete(u8) }
 
 pub struct Command {
     pub name: &'static str,
@@ -114,6 +116,8 @@ pub const COMMANDS: &[Command] = &[
     Command { name: "n", description: "Return to normal view", action: CommandAction::Normal },
     Command { name: "cp", description: "Copy to other pane", action: CommandAction::Copy },
     Command { name: "mv", description: "Move to other pane", action: CommandAction::Move },
+    Command { name: "rename", description: "Batch rename selected files", action: CommandAction::BatchRename },
+    Command { name: "all", description: "Select all regular files in the current directory", action: CommandAction::SelectAll },
     Command { name: "archive", description: "Create a .tar.gz archive", action: CommandAction::Archive },
     Command { name: "extract", description: "Extract selected archive", action: CommandAction::Extract },
     Command { name: "jobs", description: "Show and manage the file-operation queue", action: CommandAction::Jobs },
@@ -218,6 +222,15 @@ mod tests {
                 line.spans.iter().any(|span| span.content.contains(binding.label))
             }), "missing help for {}", binding.label);
         }
+    }
+
+    #[test]
+    fn batch_rename_and_select_all_shortcuts_do_not_shadow_typing() {
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)), Some(Action::SelectAll));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)), Some(Action::BatchRename));
+        assert_eq!(action_for(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)), None);
+        assert_eq!(command_for("rename"), Some(CommandAction::BatchRename));
+        assert_eq!(command_for("all"), Some(CommandAction::SelectAll));
     }
 
     #[test]
