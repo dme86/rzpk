@@ -406,6 +406,14 @@ impl RemoteTransfer {
 mod tests {
     use super::*;
     #[test]
+    fn sftp_transfer_refuses_invalid_backend_pairs_and_empty_sources() {
+        let path = PathBuf::from("/tmp");
+        assert!(RemoteTransfer::new(TransferKind::Copy, vec![], path.clone(), None, None).is_err());
+        assert!(RemoteTransfer::new(TransferKind::Copy, vec![PathBuf::from("/tmp/f")], path.clone(), None, None).is_err());
+        assert!(RemoteTransfer::new(TransferKind::Move, vec![PathBuf::from("/")], path, None, None).is_err());
+    }
+
+    #[test]
     fn host_validation_rejects_command_injection_and_option_prefix() {
         for good in ["nas", "host.example.com", "deploy@server", "192.168.1.10"] {
             assert!(validate_host(good).is_ok());
