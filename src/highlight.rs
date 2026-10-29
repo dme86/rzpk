@@ -132,7 +132,7 @@ pub fn highlight(path: &Path, lines: &[String]) -> Option<(String, Vec<Line<'sta
     let mut styled = Vec::with_capacity(lines.len());
     for line in lines {
         if line == "… preview truncated" || line == "(empty file)" {
-            styled.push(Line::styled(line.clone(), Style::default().fg(Color::Rgb(146, 131, 116))));
+            styled.push(Line::from(Span::styled(line.clone(), Style::default().fg(Color::Rgb(146, 131, 116)))));
             continue;
         }
         // The default syntect syntax dump expects newline-terminated lines.
