@@ -71,6 +71,30 @@ A pinned **`[..]`** entry appears at the top of each directory pane whenever a p
 
 `→` enters the highlighted folder in normal, split, or tree view. `Enter` on a folder enters it in normal mode, and in tree mode it expands/collapses the branch. **`Enter` on a regular file** starts your terminal editor using `$EDITOR` (falling back to `$VISUAL`, then `vi`). Editor commands with arguments, e.g. `EDITOR='nvim -u NONE'`, are supported without running a shell. rzpk temporarily releases the alternate screen/raw mode, waits for the editor to exit, restores the terminal, and refreshes the file listing. Search, marks, and navigation shortcuts are otherwise unchanged.
 
+## SFTP remote connections
+
+rzpk supports **SFTP over SSH** through the installed OpenSSH client on macOS and Linux. Add named profiles to the existing `~/.config/rzpk/config.toml`:
+
+```toml
+[connections.nas]
+host = "nas"                 # SSH alias from ~/.ssh/config, or user@host
+path = "/volume1/projects"   # initial remote folder
+
+[connections.production]
+host = "deploy@prod.example.org"
+path = "/srv/apps"
+```
+
+Set up and verify SSH authentication before connecting (`ssh nas`). The SSH connection uses **strict known_hosts verification** and your existing SSH agent, keys, ProxyJump, port and identity rules from `~/.ssh/config`. rzpk does not store credentials or automatically trust unknown host keys. An SSH error appears in the footer.
+
+Enter **`:connect nas`** to connect in the current pane, or to automatically open a right-hand SFTP pane when `:v` is not yet active. The connection is established in the background. Use `Tab` to change sides and **`Shift+S`** to rearrange them; the SFTP pane header identifies its connection. `:connections` lists configured profile names; `:disconnect` detaches the active SFTP pane and returns to your local working directory. `:refresh` reloads the active pane.
+
+File navigation, `[..]`, incremental search and marks work similarly to local paths. **`Shift+C`** copies between local and remote; **`Shift+M`** moves (deleting the source only after a successful copy). Each operation requires confirmation and is processed in the **same FIFO queue** as local file operations. Recursive folders are supported up to 20,000 entries and depth 64; existing targets are never silently overwritten. Symlinks are intentionally not followed during remote transfers. Incomplete directories may remain on failure; individual failed file transfers clean up their partially written target.
+
+The preview shows the first 24 KiB of remote text with Gruvbox syntax coloring and limited remote directory contents. Press **`Enter`** on a remote file to download a temporary working copy and open it in `$EDITOR`; after editing, changed content is queued for upload. To avoid accidental data loss, remote editing is limited to 8 MiB and checks size and modification metadata before saving. If a remote save fails, your edited temporary copy is preserved on disk and its path appears in the error. SFTP rename is not a true compare-and-swap; concurrent changes in the final instant remain possible.
+
+**Current limitations:** Remote tree expansion, image rendering of remote files, remote-to-remote copying, direct archive operations on remote panes and FTP/FTPS are not yet supported. Directory listings and text previews currently wait for an SFTP response; the initial SSH connection and bulk file transfers run in the background. You can still navigate the local pane while remote file jobs run.
+
 ## Vertical split
 
 Type `:v` and press Enter to open two side-by-side views. The right pane starts in the same directory as the left, but each pane has its own folder, cursor, scroll position, incremental search and marked entries. The active pane is indicated by a green marker in its header; `rzpk [v]` appears in the global title. Press `Tab` to focus the other pane; all existing navigation and selection shortcuts apply only to the active pane. Press **`Shift+S` (Swap)** or enter **`:swap`** to exchange the **left and right pane positions** without changing their contents, directory history, cursor, marks, scroll position, preview or tree state. The focused pane moves together with its contents; `Tab` continues to change only the focus. `Shift+S` outside split view shows a friendly hint to enable `:v` first.
