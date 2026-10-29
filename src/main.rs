@@ -10,6 +10,8 @@ mod archive;
 mod batch_rename;
 mod commands;
 mod config;
+mod create;
+mod create_dialog;
 mod details;
 mod fileops;
 mod focus;
@@ -28,6 +30,8 @@ mod tree;
 
 use archive::ArchiveJob;
 use commands::{Action, CommandAction, action_for, command_for, draw_help, help_max_scroll};
+use create::Kind as CreateKind;
+use create_dialog::{CreateDialog, Result as CreateResult};
 use config::{Config, MetadataPosition};
 use details::permissions;
 use fileops::{Transfer, TransferKind};
@@ -236,6 +240,7 @@ struct App {
     pending_transfer: Option<Transfer>,
     pending_remote_transfer: Option<remote::RemoteTransfer>,
     rename_dialog: Option<RenameDialog>,
+    create_dialog: Option<CreateDialog>,
     status: Option<String>,
     pending_archive: Option<ArchiveJob>,
     help_open: bool,
@@ -286,6 +291,7 @@ impl App {
             pending_transfer: None,
             pending_remote_transfer: None,
             rename_dialog: None,
+            create_dialog: None,
             status: None,
             pending_archive: None,
             help_open: false,
@@ -585,6 +591,29 @@ impl App {
         self.status = Some(if all_marked { "Cleared file selection".into() }
             else { format!("Selected {} file(s)", self.selection.count()) });
         self.clear_typed();
+    }
+
+    fn open_create_dialog(&mut self, kind: CreateKind) {
+        if self.queue.len() >= queue::MAX_WAITING {
+            self.error = Some("Job queue is full".to_owned());
+            return;
+        }
+        // Snapshot the active directory + SFTP connection at dialog open time.
+        self.create_dialog = Some(CreateDialog::new(self.cwd.clone(), self.remote.clone(), kind));
+        self.error = None;
+        self.clear_typed();
+    }
+
+    fn handle_create_dialog_key(&mut self, key: KeyEvent) {
+        let result = self.create_dialog.as_mut().map(|dialog| dialog.handle(key));
+        match result {
+            Some(CreateResult::Cancel) => self.create_dialog = None,
+            Some(CreateResult::Submit(plan)) => {
+                self.create_dialog = None;
+                self.begin_work(Work::Create(plan));
+            }
+            _ => {}
+        }
     }
 
     fn open_batch_rename(&mut self) {
@@ -1170,6 +1199,7 @@ impl App {
     fn draw_overlays(&self, frame: &mut Frame, area: Rect) {
         self.draw_transfer_dialog(frame, area);
         if let Some(dialog) = &self.rename_dialog { dialog.draw(frame, area); }
+        if let Some(dialog) = &self.create_dialog { dialog.draw(frame, area); }
         self.draw_archive_dialog(frame, area);
         self.draw_queue_dialog(frame, area);
         if self.help_open {
@@ -1430,6 +1460,8 @@ impl App {
                     Some(CommandAction::Copy) => self.start_transfer(TransferKind::Copy),
                     Some(CommandAction::Move) => self.start_transfer(TransferKind::Move),
                     Some(CommandAction::BatchRename) => self.open_batch_rename(),
+                    Some(CommandAction::New) | Some(CommandAction::NewFolder) => self.open_create_dialog(CreateKind::Folder),
+                    Some(CommandAction::NewFile) => self.open_create_dialog(CreateKind::File),
                     Some(CommandAction::SelectAll) => self.select_all_files(),
                     Some(CommandAction::Archive) => self.start_archive(false),
                     Some(CommandAction::Extract) => self.start_archive(true),
@@ -1509,6 +1541,10 @@ impl App {
             self.handle_batch_rename_key(key);
             return;
         }
+        if self.create_dialog.is_some() {
+            self.handle_create_dialog_key(key);
+            return;
+        }
 
         if self.help_open {
             match key.code {
@@ -1563,6 +1599,7 @@ impl App {
             Some(Action::Mark) => self.toggle_current(),
             Some(Action::SelectAll) => self.select_all_files(),
             Some(Action::BatchRename) => self.open_batch_rename(),
+            Some(Action::New) => self.open_create_dialog(CreateKind::Folder),
             Some(Action::Clear) => { self.selection.clear(); self.clear_typed(); }
             Some(Action::Copy) => self.start_transfer(TransferKind::Copy),
             Some(Action::Move) => self.start_transfer(TransferKind::Move),
@@ -1950,6 +1987,7 @@ mod tests {
             pending_transfer: None,
             pending_remote_transfer: None,
             rename_dialog: None,
+            create_dialog: None,
             status: None,
             pending_archive: None,
             help_open: false,
