@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::{Entry, highlight, image_preview::{self, ImagePreview}};
+use crate::{Entry, highlight, image_preview::{self, ImagePreview}, remote::Remote};
 use ratatui_image::{Resize, StatefulImage};
 
 const MAX_BYTES: u64 = 24 * 1024;
@@ -74,6 +74,47 @@ impl Preview {
             None => (None, None),
         };
         Self { title, lines, syntax, styled_lines, image }
+    }
+
+    pub fn remote(entry: &Entry, remote: &Remote) -> Self {
+        let lines = if entry.is_dir {
+            match remote.list(&entry.path) {
+                Ok(entries) => entries.into_iter().take(MAX_DIRECTORY_ITEMS)
+                    .map(|entry| format!("{}{}", if entry.is_dir { "▸ " } else { "  " }, entry.name))
+                    .collect(),
+                Err(error) => vec![format!("Cannot read remote directory: {error}")],
+            }
+        } else if entry.is_symlink {
+            vec!["(remote symlink preview unavailable)".to_owned()]
+        } else {
+            match remote.preview(&entry.path) {
+                Ok(bytes) if bytes.contains(&0) => vec!["(binary remote file)".to_owned()],
+                Ok(bytes) => {
+                    let truncated = bytes.len() > MAX_BYTES as usize;
+                    let bytes = &bytes[..bytes.len().min(MAX_BYTES as usize)];
+                    let text = String::from_utf8_lossy(bytes);
+                    let mut lines = text.lines().take(MAX_LINES).map(|line|
+                        line.chars().map(|ch| if ch == '\t' { ' ' } else if ch.is_control() { ' ' } else { ch })
+                            .take(4096).collect::<String>()
+                    ).collect::<Vec<_>>();
+                    if truncated || text.lines().count() > MAX_LINES {
+                        lines.push("… preview truncated".to_owned());
+                    }
+                    lines
+                }
+                Err(error) => vec![format!("Cannot read remote file: {error}")],
+            }
+        };
+        let highlighted = if !entry.is_dir && !entry.is_symlink
+            && !lines.first().is_some_and(|line| {
+                line.starts_with("(binary") || line.starts_with("Cannot ")
+            })
+        {
+            highlight::highlight(&entry.path, &lines)
+        } else { None };
+        let (syntax, styled_lines) = highlighted
+            .map_or((None, None), |(syntax, styled)| (Some(syntax), Some(styled)));
+        Self { title: entry.name.clone(), lines, syntax, styled_lines, image: None }
     }
 
     pub fn poll_image(&mut self) -> bool {
