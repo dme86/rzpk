@@ -68,7 +68,7 @@ impl Remote {
         }
         let rt = Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
         let sftp = rt.block_on(async {
-            let ssh = Session::connect_mux(&hostname, KnownHosts::Strict).await.map_err(other)?;
+            let ssh = Session::connect(&hostname, KnownHosts::Strict).await.map_err(other)?;
             Sftp::from_session(ssh, SftpOptions::default()).await.map_err(other)
         })?;
         let remote = Arc::new(Self { name, hostname, root, rt, sftp });
@@ -81,7 +81,8 @@ impl Remote {
         let entries = self.rt.block_on(async {
             let mut filesystem = self.sftp.fs();
             let dir = filesystem.open_dir(path).await.map_err(other)?;
-            let mut stream = dir.read_dir();
+            let stream = dir.read_dir();
+            tokio::pin!(stream);
             let mut rows = Vec::new();
             while let Some(entry) = stream.next().await {
                 let entry = entry.map_err(other)?;
@@ -309,7 +310,7 @@ impl RemoteTransfer {
                     copied_dirs.push(src.clone());
                     let children = self.children(&src)?;
                     for child in children.into_iter().rev() {
-                        let filename = child.file_name().ok_or_else(|| io::Error::other("Invalid child path"))?;
+                        let filename = child.file_name().ok_or_else(|| io::Error::other("Invalid child path"))?.to_os_string();
                         stack.push((child, dst.join(filename), depth + 1));
                     }
                 } else {
