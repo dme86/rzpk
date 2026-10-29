@@ -39,7 +39,7 @@ jobs:
           PasswordAuthentication no
           PubkeyAuthentication yes
           AuthorizedKeysFile .ssh/authorized_keys
-          UsePAM no
+          UsePAM yes
           PermitRootLogin no
           Subsystem sftp internal-sftp
           LogLevel VERBOSE
@@ -58,7 +58,7 @@ jobs:
             UserKnownHostsFile $HOME/.ssh/known_hosts
           EOF
           chmod 600 "$HOME/.ssh/config"
-          ssh -o ConnectTimeout=5 rzpk-ci true
+          ssh -o ConnectTimeout=5 rzpk-ci true || { sudo tail -n 70 "$RUNNER_TEMP/rzpk-sshd.log"; exit 1; }
       - name: Test nested upload and download via SFTP
         env:
           RZPK_TEST_SFTP_HOST: rzpk-ci
