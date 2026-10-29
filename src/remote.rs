@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use openssh::{KnownHosts, Session};
 use openssh_sftp_client::{Sftp, SftpOptions};
 use tokio::runtime::{Builder, Runtime};
-use crate::jobs::Progress;
+use crate::{Entry, jobs::Progress};
 
 const MAX_LIST: usize = 2500;
 pub const MAX_PREVIEW: usize = 24 * 1024;
@@ -30,6 +30,21 @@ pub struct RemoteEntry {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub size: Option<u64>,
+}
+
+impl RemoteEntry {
+    pub fn into_entry(self) -> Entry {
+        Entry {
+            path: self.path,
+            name_key: self.name.to_lowercase(),
+            name: self.name,
+            is_dir: self.is_dir,
+            is_symlink: self.is_symlink,
+            permissions: "----------".to_owned(),
+            size: self.size,
+            modified: None,
+        }
+    }
 }
 
 fn other(error: impl std::fmt::Display) -> io::Error { io::Error::other(error.to_string()) }
