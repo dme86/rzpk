@@ -447,11 +447,13 @@ mod tests {
 
         // Remote editing must upload changes and reject stale snapshots.
         let editable = remote_folder.join("nested/hello.txt");
-        let (original, stamp) = remote.edit_snapshot(&editable)?;
+        let (original, stamp) = remote.edit_snapshot(&editable)
+            .map_err(|error| io::Error::other(format!("edit_snapshot: {error}")))?;
         assert_eq!(original, b"roundtrip text");
         let working_copy = workspace.path().join("edited.txt");
         fs::write(&working_copy, b"remote file changed and saved")?;
-        remote.save_edit(&working_copy, &editable, &stamp)?;
+        remote.save_edit(&working_copy, &editable, &stamp)
+            .map_err(|error| io::Error::other(format!("save_edit: {error}")))?;
         assert_eq!(remote.preview(&editable)?, b"remote file changed and saved");
         assert!(remote.save_edit(&working_copy, &editable, &stamp).is_err());
 
@@ -461,13 +463,15 @@ mod tests {
         fs::write(&movable, b"move via sftp")?;
         let upload_move = RemoteTransfer::new(TransferKind::Move, vec![movable.clone()],
             remote_folder.clone(), None, Some(remote.clone()))?;
-        upload_move.execute(&Arc::new(Progress::new()))?;
+        upload_move.execute(&Arc::new(Progress::new()))
+            .map_err(|error| io::Error::other(format!("upload_move: {error}")))?;
         assert!(!movable.exists());
         let moved_remote = remote_folder.join("move-me.txt");
         assert!(remote.list(&remote_folder)?.iter().any(|entry| entry.name == "move-me.txt"));
         let download_move = RemoteTransfer::new(TransferKind::Move,
             vec![moved_remote], downloaded.clone(), Some(remote.clone()), None)?;
-        download_move.execute(&Arc::new(Progress::new()))?;
+        download_move.execute(&Arc::new(Progress::new()))
+            .map_err(|error| io::Error::other(format!("download_move: {error}")))?;
         assert_eq!(fs::read(downloaded.join("move-me.txt"))?, b"move via sftp");
         assert!(!remote.list(&remote_folder)?.iter().any(|entry| entry.name == "move-me.txt"));
 
