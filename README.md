@@ -92,6 +92,12 @@ The modes are independent and can be combined:
 
 Previews adapt to terminal size: beside the list in wide panes, below it in narrower ones, and temporarily hidden in extremely small windows. Only the first 24 KiB / 120 lines of a file, or up to 60 directory entries, are read. No preview files are accessed during rendering.
 
+### Gruvbox syntax colors
+
+In `:p` preview mode, recognized source files are tokenized with **syntect** and rendered using a small, built-in **Gruvbox Dark** theme: keywords red, types yellow, strings green, functions aqua, numbers purple, comments muted gray, and parameters blue. Syntax is detected from the file extension or a recognized shebang; the preview title shows the detected language. Common source formats such as Rust, Python, Bash, JSON and Markdown use their bundled grammars. Files such as TOML, Nix, Terraform/HCL and `.env` use a deliberately lightweight config tokenizer if a full grammar is not available.
+
+The syntax set and palette are initialized once, and tokens are highlighted **only when the selected file changes**, never on every draw. Unknown extensions remain plain text, while binary files and unreadable files retain their existing placeholders. Preview size limits are unchanged. The pure Rust `syntect` regex backend is used to avoid an Oniguruma/C build dependency on macOS and Linux.
+
 ## Tree behavior
 
 Tree mode **automatically expands the first two folder levels** when switched on, up to **6 automatically opened branches** per tree. That makes the hierarchy visible immediately without exploding into a huge recursive scan. Additional folders can be opened or closed with `Enter`.
