@@ -413,6 +413,46 @@ mod tests {
         assert!(RemoteTransfer::new(TransferKind::Move, vec![PathBuf::from("/")], path, None, None).is_err());
     }
 
+    /// GitHub Actions supplies a loopback OpenSSH test server. On developer
+    /// machines without that environment variable this remains an offline test.
+    #[test]
+    fn real_sftp_roundtrip_when_test_server_is_available() -> io::Result<()> {
+        let Ok(host) = std::env::var("RZPK_TEST_SFTP_HOST") else { return Ok(()); };
+        let directory = PathBuf::from(std::env::var("RZPK_TEST_SFTP_DIR")
+            .map_err(io::Error::other)?);
+        let remote = Remote::connect("ci".to_owned(), host, directory.clone())?;
+        let workspace = tempfile::tempdir()?;
+        let source = workspace.path().join("nested");
+        fs::create_dir(&source)?;
+        fs::create_dir(source.join("deeper"))?;
+        fs::write(source.join("hello.txt"), "roundtrip text")?;
+        fs::write(source.join("deeper/other.txt"), "nested file")?;
+        let remote_folder = directory.join(format!("rzpk-ci-{}", std::process::id()));
+        remote.mkdir(&remote_folder)?;
+        let uploaded = RemoteTransfer::new(TransferKind::Copy, vec![source],
+            remote_folder.clone(), None, Some(remote.clone()))?;
+        let progress = Arc::new(Progress::new());
+        uploaded.execute(&progress)?;
+        let list = remote.list(&remote_folder.join("nested"))?;
+        assert!(list.iter().any(|entry| entry.name == "hello.txt"));
+        assert!(list.iter().any(|entry| entry.name == "deeper" && entry.is_dir));
+        let downloaded = workspace.path().join("downloaded");
+        fs::create_dir(&downloaded)?;
+        let download = RemoteTransfer::new(TransferKind::Copy,
+            vec![remote_folder.join("nested")], downloaded.clone(),
+            Some(remote.clone()), None)?;
+        download.execute(&Arc::new(Progress::new()))?;
+        assert_eq!(fs::read_to_string(downloaded.join("nested/hello.txt"))?, "roundtrip text");
+        assert_eq!(fs::read_to_string(downloaded.join("nested/deeper/other.txt"))?, "nested file");
+
+        remote.remove_file(&remote_folder.join("nested/deeper/other.txt"))?;
+        remote.remove_file(&remote_folder.join("nested/hello.txt"))?;
+        remote.rmdir(&remote_folder.join("nested/deeper"))?;
+        remote.rmdir(&remote_folder.join("nested"))?;
+        remote.rmdir(&remote_folder)?;
+        Ok(())
+    }
+
     #[test]
     fn host_validation_rejects_command_injection_and_option_prefix() {
         for good in ["nas", "host.example.com", "deploy@server", "192.168.1.10"] {
