@@ -94,7 +94,7 @@ impl Preview {
                     let bytes = &bytes[..bytes.len().min(MAX_BYTES as usize)];
                     let text = String::from_utf8_lossy(bytes);
                     let mut lines = text.lines().take(MAX_LINES).map(|line|
-                        line.chars().map(|ch| if ch == '\t' { ' ' } else if ch.is_control() { ' ' } else { ch })
+                        line.chars().map(|ch| if ch.is_control() { ' ' } else { ch })
                             .take(4096).collect::<String>()
                     ).collect::<Vec<_>>();
                     if truncated || text.lines().count() > MAX_LINES {
