@@ -73,7 +73,7 @@ A pinned **`[..]`** entry appears at the top of each directory pane whenever a p
 
 ## Vertical split
 
-Type `:v` and press Enter to open two side-by-side views. The right pane starts in the same directory as the left, but each pane has its own folder, cursor, scroll position, incremental search and marked entries. The active pane is indicated by a green marker in its header; `rzpk [v]` appears in the global title. Press `Tab` to focus the other pane; all existing navigation and selection shortcuts apply only to the active pane.
+Type `:v` and press Enter to open two side-by-side views. The right pane starts in the same directory as the left, but each pane has its own folder, cursor, scroll position, incremental search and marked entries. The active pane is indicated by a green marker in its header; `rzpk [v]` appears in the global title. Press `Tab` to focus the other pane; all existing navigation and selection shortcuts apply only to the active pane. Press **`Shift+S` (Swap)** or enter **`:swap`** to exchange the **left and right pane positions** without changing their contents, directory history, cursor, marks, scroll position, preview or tree state. The focused pane moves together with its contents; `Tab` continues to change only the focus. `Shift+S` outside split view shows a friendly hint to enable `:v` first.
 
 Type `:v` again to close the split and retain the left pane. On a terminal narrower than 42 columns, only the active pane is rendered until there is enough space, but both panes keep their state.
 
