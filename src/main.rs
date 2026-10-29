@@ -18,6 +18,7 @@ mod jumps;
 mod pane;
 mod preview;
 mod queue;
+mod remote;
 mod render;
 mod selection;
 mod tree;
